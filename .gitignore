@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+datasets/*
+!datasets/README.md
+vendor/
+**/runs/
+tmp/*
+# 学習の途中の見本の画像(ローカルだけに残す。GitHub には最後の見本だけを上げる)
+**/results/samples/*/epoch*/
+**/results/samples/index_epochs.json
+**/results/samples/DIAG_*/
+**/results/samples/*_inverted_boxes/
+**/results/samples/index_local.json

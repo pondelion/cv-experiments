@@ -1,0 +1,26 @@
+{
+ "prompt_current": {
+  "rgb_distance": {
+   "usable_rate": 0.95,
+   "area_ratio_median": 0.2221459282769097,
+   "single_component_rate": 0.99
+  },
+  "green_dominance": {
+   "usable_rate": 0.97,
+   "area_ratio_median": 0.20901234944661456,
+   "single_component_rate": 1.0
+  }
+ },
+ "prompt_no_shadow": {
+  "rgb_distance": {
+   "usable_rate": 0.99,
+   "area_ratio_median": 0.15105946858723956,
+   "single_component_rate": 1.0
+  },
+  "green_dominance": {
+   "usable_rate": 0.98,
+   "area_ratio_median": 0.14383188883463544,
+   "single_component_rate": 0.99
+  }
+ }
+}

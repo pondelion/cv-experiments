@@ -1,0 +1,350 @@
+{
+ "by_background": {
+  "green": {
+   "n": 100,
+   "usable_rate": 0.95,
+   "bg_spread_median": 12.287936210632324,
+   "single_component_rate": 0.99,
+   "touches_border_rate": 0.02,
+   "area_ratio_median": 0.2221459282769097
+  },
+  "white": {
+   "n": 100,
+   "usable_rate": 0.96,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 0.98,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.21384090847439235
+  }
+ },
+ "by_class": {
+  "green/airplane": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 15.945219039916992,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.0826144748263889
+  },
+  "green/bicycle": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 15.776561737060547,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.11214192708333333
+  },
+  "green/bird": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 13.784049034118652,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.1696048312717014
+  },
+  "green/boat": {
+   "n": 5,
+   "usable_rate": 0.8,
+   "bg_spread_median": 12.884099006652832,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.2,
+   "area_ratio_median": 0.1564670138888889
+  },
+  "green/bottle": {
+   "n": 5,
+   "usable_rate": 0.8,
+   "bg_spread_median": 17.14642906188965,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.15319315592447916
+  },
+  "green/bus": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 12.776932716369629,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2949642605251736
+  },
+  "green/car": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 12.845232963562012,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2547743055555556
+  },
+  "green/cat": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 11.357816696166992,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2641262478298611
+  },
+  "green/chair": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 15.033296585083008,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.1406707763671875
+  },
+  "green/cow": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 10.630146026611328,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2783304850260417
+  },
+  "green/dining table": {
+   "n": 5,
+   "usable_rate": 0.8,
+   "bg_spread_median": 13.56466007232666,
+   "single_component_rate": 0.8,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.196868896484375
+  },
+  "green/dog": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 11.832159996032715,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.20477803548177084
+  },
+  "green/horse": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 11.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2603200276692708
+  },
+  "green/motorcycle": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 13.06517505645752,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2959035237630208
+  },
+  "green/person": {
+   "n": 5,
+   "usable_rate": 0.6,
+   "bg_spread_median": 12.961481094360352,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.2,
+   "area_ratio_median": 0.15262349446614584
+  },
+  "green/potted plant": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 11.575837135314941,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2275729709201389
+  },
+  "green/sheep": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 8.306623458862305,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2659318712022569
+  },
+  "green/couch": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 9.433980941772461,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.3058115641276042
+  },
+  "green/train": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 12.961481094360352,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.22477552625868055
+  },
+  "green/tv": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 13.747727394104004,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.3284996880425347
+  },
+  "white/airplane": {
+   "n": 5,
+   "usable_rate": 0.6,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 0.8,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.06924947102864583
+  },
+  "white/bicycle": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.12339274088541667
+  },
+  "white/bird": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.1726006401909722
+  },
+  "white/boat": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.13873460557725695
+  },
+  "white/bottle": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.12740580240885416
+  },
+  "white/bus": {
+   "n": 5,
+   "usable_rate": 0.8,
+   "bg_spread_median": 2.2360680103302,
+   "single_component_rate": 0.8,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.3177168104383681
+  },
+  "white/car": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2537977430555556
+  },
+  "white/cat": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.2360680103302,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2614932590060764
+  },
+  "white/chair": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.11457655164930555
+  },
+  "white/cow": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.2360680103302,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.24257405598958334
+  },
+  "white/dining table": {
+   "n": 5,
+   "usable_rate": 0.8,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.11983574761284722
+  },
+  "white/dog": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2176700168185764
+  },
+  "white/horse": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.2360680103302,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2542809380425347
+  },
+  "white/motorcycle": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2966935899522569
+  },
+  "white/person": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.09642537434895833
+  },
+  "white/potted plant": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.20179239908854166
+  },
+  "white/sheep": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2682986789279514
+  },
+  "white/couch": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 2.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.2909274631076389
+  },
+  "white/train": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.4142135381698608,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.1380767822265625
+  },
+  "white/tv": {
+   "n": 5,
+   "usable_rate": 1.0,
+   "bg_spread_median": 1.0,
+   "single_component_rate": 1.0,
+   "touches_border_rate": 0.0,
+   "area_ratio_median": 0.3342675103081597
+  }
+ },
+ "time_ms": {
+  "generate": {
+   "median_ms": 586.3726109964773,
+   "p90_ms": 603.9159915409982,
+   "mean_ms": 587.2862293582523,
+   "n": 198
+  }
+ }
+}

@@ -1,0 +1,632 @@
+[
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "488664",
+  "file": "coco_val_dev/gt/488664.jpg",
+  "n_objects": 3
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "224200",
+  "file": "coco_val_dev/gt/224200.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "442323",
+  "file": "coco_val_dev/gt/442323.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "516143",
+  "file": "coco_val_dev/gt/516143.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "242411",
+  "file": "coco_val_dev/gt/242411.jpg",
+  "n_objects": 4
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "22479",
+  "file": "coco_val_dev/gt/22479.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "150265",
+  "file": "coco_val_dev/gt/150265.jpg",
+  "n_objects": 6
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "566436",
+  "file": "coco_val_dev/gt/566436.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "294783",
+  "file": "coco_val_dev/gt/294783.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "280930",
+  "file": "coco_val_dev/gt/280930.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "233033",
+  "file": "coco_val_dev/gt/233033.jpg",
+  "n_objects": 7
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "gt",
+  "id": "532481",
+  "file": "coco_val_dev/gt/532481.jpg",
+  "n_objects": 8
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "488664",
+  "file": "coco_val_dev/sam3/488664.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "224200",
+  "file": "coco_val_dev/sam3/224200.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "442323",
+  "file": "coco_val_dev/sam3/442323.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "516143",
+  "file": "coco_val_dev/sam3/516143.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "242411",
+  "file": "coco_val_dev/sam3/242411.jpg",
+  "n_objects": 5
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "22479",
+  "file": "coco_val_dev/sam3/22479.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "150265",
+  "file": "coco_val_dev/sam3/150265.jpg",
+  "n_objects": 7
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "566436",
+  "file": "coco_val_dev/sam3/566436.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "294783",
+  "file": "coco_val_dev/sam3/294783.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "280930",
+  "file": "coco_val_dev/sam3/280930.jpg",
+  "n_objects": 3
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "233033",
+  "file": "coco_val_dev/sam3/233033.jpg",
+  "n_objects": 6
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "sam3",
+  "id": "532481",
+  "file": "coco_val_dev/sam3/532481.jpg",
+  "n_objects": 5
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "488664",
+  "file": "coco_val_dev/rfdetr_nano/488664.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "224200",
+  "file": "coco_val_dev/rfdetr_nano/224200.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "442323",
+  "file": "coco_val_dev/rfdetr_nano/442323.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "516143",
+  "file": "coco_val_dev/rfdetr_nano/516143.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "242411",
+  "file": "coco_val_dev/rfdetr_nano/242411.jpg",
+  "n_objects": 6
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "22479",
+  "file": "coco_val_dev/rfdetr_nano/22479.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "150265",
+  "file": "coco_val_dev/rfdetr_nano/150265.jpg",
+  "n_objects": 4
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "566436",
+  "file": "coco_val_dev/rfdetr_nano/566436.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "294783",
+  "file": "coco_val_dev/rfdetr_nano/294783.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "280930",
+  "file": "coco_val_dev/rfdetr_nano/280930.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "233033",
+  "file": "coco_val_dev/rfdetr_nano/233033.jpg",
+  "n_objects": 7
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_nano",
+  "id": "532481",
+  "file": "coco_val_dev/rfdetr_nano/532481.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "488664",
+  "file": "coco_val_dev/rfdetr_large/488664.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "224200",
+  "file": "coco_val_dev/rfdetr_large/224200.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "442323",
+  "file": "coco_val_dev/rfdetr_large/442323.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "516143",
+  "file": "coco_val_dev/rfdetr_large/516143.jpg",
+  "n_objects": 3
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "242411",
+  "file": "coco_val_dev/rfdetr_large/242411.jpg",
+  "n_objects": 4
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "22479",
+  "file": "coco_val_dev/rfdetr_large/22479.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "150265",
+  "file": "coco_val_dev/rfdetr_large/150265.jpg",
+  "n_objects": 6
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "566436",
+  "file": "coco_val_dev/rfdetr_large/566436.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "294783",
+  "file": "coco_val_dev/rfdetr_large/294783.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "280930",
+  "file": "coco_val_dev/rfdetr_large/280930.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "233033",
+  "file": "coco_val_dev/rfdetr_large/233033.jpg",
+  "n_objects": 8
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_large",
+  "id": "532481",
+  "file": "coco_val_dev/rfdetr_large/532481.jpg",
+  "n_objects": 9
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "488664",
+  "file": "coco_val_dev/rfdetr_2xlarge/488664.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "224200",
+  "file": "coco_val_dev/rfdetr_2xlarge/224200.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "442323",
+  "file": "coco_val_dev/rfdetr_2xlarge/442323.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "516143",
+  "file": "coco_val_dev/rfdetr_2xlarge/516143.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "242411",
+  "file": "coco_val_dev/rfdetr_2xlarge/242411.jpg",
+  "n_objects": 5
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "22479",
+  "file": "coco_val_dev/rfdetr_2xlarge/22479.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "150265",
+  "file": "coco_val_dev/rfdetr_2xlarge/150265.jpg",
+  "n_objects": 6
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "566436",
+  "file": "coco_val_dev/rfdetr_2xlarge/566436.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "294783",
+  "file": "coco_val_dev/rfdetr_2xlarge/294783.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "280930",
+  "file": "coco_val_dev/rfdetr_2xlarge/280930.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "233033",
+  "file": "coco_val_dev/rfdetr_2xlarge/233033.jpg",
+  "n_objects": 8
+ },
+ {
+  "group": "coco_val_dev",
+  "condition": "rfdetr_2xlarge",
+  "id": "532481",
+  "file": "coco_val_dev/rfdetr_2xlarge/532481.jpg",
+  "n_objects": 8
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "789",
+  "file": "voc_val/gt/789.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "862",
+  "file": "voc_val/gt/862.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "83",
+  "file": "voc_val/gt/83.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "531",
+  "file": "voc_val/gt/531.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "1048",
+  "file": "voc_val/gt/1048.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "gt",
+  "id": "996",
+  "file": "voc_val/gt/996.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "789",
+  "file": "voc_val/sam3/789.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "862",
+  "file": "voc_val/sam3/862.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "83",
+  "file": "voc_val/sam3/83.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "531",
+  "file": "voc_val/sam3/531.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "1048",
+  "file": "voc_val/sam3/1048.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "sam3",
+  "id": "996",
+  "file": "voc_val/sam3/996.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "789",
+  "file": "voc_val/rfdetr_nano/789.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "862",
+  "file": "voc_val/rfdetr_nano/862.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "83",
+  "file": "voc_val/rfdetr_nano/83.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "531",
+  "file": "voc_val/rfdetr_nano/531.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "1048",
+  "file": "voc_val/rfdetr_nano/1048.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_nano",
+  "id": "996",
+  "file": "voc_val/rfdetr_nano/996.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "789",
+  "file": "voc_val/rfdetr_large/789.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "862",
+  "file": "voc_val/rfdetr_large/862.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "83",
+  "file": "voc_val/rfdetr_large/83.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "531",
+  "file": "voc_val/rfdetr_large/531.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "1048",
+  "file": "voc_val/rfdetr_large/1048.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_large",
+  "id": "996",
+  "file": "voc_val/rfdetr_large/996.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "789",
+  "file": "voc_val/rfdetr_2xlarge/789.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "862",
+  "file": "voc_val/rfdetr_2xlarge/862.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "83",
+  "file": "voc_val/rfdetr_2xlarge/83.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "531",
+  "file": "voc_val/rfdetr_2xlarge/531.jpg",
+  "n_objects": 2
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "1048",
+  "file": "voc_val/rfdetr_2xlarge/1048.jpg",
+  "n_objects": 1
+ },
+ {
+  "group": "voc_val",
+  "condition": "rfdetr_2xlarge",
+  "id": "996",
+  "file": "voc_val/rfdetr_2xlarge/996.jpg",
+  "n_objects": 1
+ }
+]

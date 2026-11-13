@@ -1,0 +1,38 @@
+# 公式の yolo26-seg.yaml(ultralytics 8.4.211)の backbone(Conv と C3k2 の段)だけを timm の ResNet-50 に差し替えたもの。
+# SPPF・C2PSA・neck・head は公式のまま(層の番号はずれるので、つなぐ先の番号だけ直した)。
+# 大きさの版は l(depth 1.0・width 1.0・最大 512 チャンネル。neck の出力は 256・512・512 で、自作の YOLO26-seg 系と同じ)。
+
+nc: 80 # number of classes
+end2end: True # whether to use end-to-end mode
+reg_max: 1 # DFL bins
+scales:
+  # [depth, width, max_channels]
+  l: [1.00, 1.00, 512]
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, TimmBackbone, [2048, resnet50.a1_in1k, [2, 3, 4]]] # 0: [C3, C4, C5] の list
+  - [0, 1, Index, [512, 0]] # 1-P3/8
+  - [0, 1, Index, [1024, 1]] # 2-P4/16
+  - [0, 1, Index, [2048, 2]] # 3-P5/32
+  - [-1, 1, SPPF, [1024, 5, 3, True]] # 4
+  - [-1, 2, C2PSA, [1024]] # 5
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 2], 1, Concat, [1]] # cat backbone P4
+  - [-1, 2, C3k2, [512, True]] # 8
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 1], 1, Concat, [1]] # cat backbone P3
+  - [-1, 2, C3k2, [256, True]] # 11 (P3/8-small)
+
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 8], 1, Concat, [1]] # cat head P4
+  - [-1, 2, C3k2, [512, True]] # 14 (P4/16-medium)
+
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 5], 1, Concat, [1]] # cat head P5
+  - [-1, 1, C3k2, [1024, True, 0.5, True]] # 17 (P5/32-large)
+
+  - [[11, 14, 17], 1, Segment26, [nc, 32, 256]] # Segment26(P3, P4, P5)
