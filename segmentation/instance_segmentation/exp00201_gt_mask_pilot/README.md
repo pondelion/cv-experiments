@@ -44,6 +44,14 @@
   **白い背景では、物体の白い部分(牛など)が背景と判定される**(グリーンバックでは、緑の物体で同じことが起きうる)。
   たまに頭が 2 つある馬のような崩れた物体が描かれる(① の範囲では取り除けない。③ の検品の対象)
 
+グリーンバック(20 クラスの一覧。クラスごとの画像は `results/samples/q1/green/{クラス}.jpg`):
+
+![](results/samples/q1/grid_green.jpg)
+
+白(`results/samples/q1/white/{クラス}.jpg`):
+
+![](results/samples/q1/grid_white.jpg)
+
 ### Q1b: 影をマスクに入れないようにできるか(`q1b_shadow.py`)
 
 グリーンバックで、抜き出しの規則(RGB の距離 / 緑の強さ)× プロンプト(今の文面 / 宙に浮かせ・地面をなくし・照明を平らにする文面)を比べた。
@@ -57,6 +65,14 @@
 
 - 見本を目で見た結果: **宙に浮かせる文面で、影の問題は解決できている**
 - 決めたこと: 影を描かせない文面を使う。背景はクラスごとに使い分ける(基本はグリーンバック。緑になりやすいクラスは緑と離れた色)
+
+今の文面(クラスごとの画像は `results/samples/q1b/prompt_current/{クラス}.jpg`):
+
+![](results/samples/q1b/grid_prompt_current.jpg)
+
+宙に浮かせる文面(`results/samples/q1b/prompt_no_shadow/{クラス}.jpg`):
+
+![](results/samples/q1b/grid_prompt_no_shadow.jpg)
 
 ### Q1c: 多様な単一の物体を生成できるか(`q1c_diversity.py`)
 
@@ -86,6 +102,18 @@ dog・cat はどの作り方でもほぼ同じ(0.51〜0.57)。tv・car のよう
   小さくなり(影の分)、規則で使える数は多くの作り方で増えた(seed 6 → 9、llm 8 → 10、llm_v3 は 10 → 9)。
   見比べは `results/samples/q1c/potted_plant_magenta_rule_check.jpg`([元の画像 | RGB の距離 | マゼンタ用の規則])。上の表の値は、直す前の規則で計算したもの
 
+見本の例(作り方 5 通り × 10 枚。ほかのクラスは `results/samples/q1c/{クラス}.jpg`)。person(形の重なりの差が大きかったクラス):
+
+![](results/samples/q1c/person.jpg)
+
+horse:
+
+![](results/samples/q1c/horse.jpg)
+
+鉢植えの規則の見比べ([元の画像 | RGB の距離 | マゼンタ用の規則]):
+
+![](results/samples/q1c/potted_plant_magenta_rule_check.jpg)
+
 ### Q2・Q3: 合成と、背景の作り方(`q2_compose.py`)
 
 Q1c の llm_v3 の物体(直した規則で抜き出し直し、規則で使えると判定したもの)を、場所(公園・リビングなど)ごとに、その場所にいそうなクラスから
@@ -102,7 +130,22 @@ Q1c の llm_v3 の物体(直した規則で抜き出し直し、規則で使え�
 - **VRAM があふれた原因**: diffusers の `from_pipe` で inpainting のパイプラインを作ると、型を指定しないと共有している重みを float32 に変えてしまい、
   本体が約 8GB → 約 16GB になっていた(元のパイプラインの重みも float32 になる)。型を明示して直した。あわせて、プロンプトの文章の特徴を先にまとめて計算し、
   文章を読む部分(約 8GB)を CPU に退かせた([lib_common/synthetic_data/flux2_klein.py](../../../lib_common/synthetic_data/flux2_klein.py))
-- 見本は `results/samples/q2/{番号}_{paste,inpaint}{,_gt}.jpg`(_gt は正解のマスクを重ねたもの)
+- 見本は `results/samples/q2/{番号}_{paste,inpaint_full_empty,inpaint_full_noclass}{,_gt}.jpg`(_gt は正解のマスクを重ねたもの。
+  inpaint_full_empty は「場所だけ + 何もいない」、inpaint_full_noclass は「場所だけ + 全クラスを名前で否定」の文面)
+
+場面 0000 の例(上: 画像、下: 正解のマスクを重ねたもの):
+
+| paste | inpaint_full_empty | inpaint_full_noclass |
+|---|---|---|
+| ![](results/samples/q2/0000_paste.jpg) | ![](results/samples/q2/0000_inpaint_full_empty.jpg) | ![](results/samples/q2/0000_inpaint_full_noclass.jpg) |
+| ![](results/samples/q2/0000_paste_gt.jpg) | ![](results/samples/q2/0000_inpaint_full_empty_gt.jpg) | ![](results/samples/q2/0000_inpaint_full_noclass_gt.jpg) |
+
+場面 0001:
+
+| paste | inpaint_full_empty | inpaint_full_noclass |
+|---|---|---|
+| ![](results/samples/q2/0001_paste.jpg) | ![](results/samples/q2/0001_inpaint_full_empty.jpg) | ![](results/samples/q2/0001_inpaint_full_noclass.jpg) |
+| ![](results/samples/q2/0001_paste_gt.jpg) | ![](results/samples/q2/0001_inpaint_full_empty_gt.jpg) | ![](results/samples/q2/0001_inpaint_full_noclass_gt.jpg) |
 
 ## 設定
 

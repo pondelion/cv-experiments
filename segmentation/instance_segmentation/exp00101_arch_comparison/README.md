@@ -94,9 +94,11 @@ YOLO26 は論文の本文と付録の表(S5〜S9)、自作はコード(`lib_comm
 
 - 学習: `coco_train_cls8_2k`(8 クラス・2,000 枚。うち物体のない画像 100 枚。クラスごとの画像の数をそろえて選んだ)。
   最初の 2 本だけ `coco_train_10pct`(20 クラス・9,528 枚)
-- 評価: `coco_val_dev_cls8`・`voc_val_cls8`(最初の 2 本は `coco_val_dev`・`voc_val`)。セットの作り方とクラスの内訳は
-  instance_segmentation/README.md
-- どの方式も batch 16(1 回の更新あたり 16 枚)、入力 512、bf16
+- val: `coco_val_dev_cls8`(先頭 500 枚で最良の重みを選び、全体で PQ などの閾値を選ぶ。精度としては報告しない)
+- test: `coco_val_test_cls8`・`voc_val_cls8`(最終の精度はこの 2 つだけで見る)。旧条件の最初の 2 本(20 クラス)は
+  `coco_val_dev`・`voc_val` で評価した。セットの作り方とクラスの内訳は instance_segmentation/README.md
+- どの方式も batch 16・入力 512。自作は bf16。公式の RF-DETR-Seg・YOLO26-seg は公式の自動の混合精度で、公式の YOLO26-seg は
+  勾配の累積で 1 回の更新あたり 64 枚(ほかは 16 枚)
 
 ## 評価の方法
 
@@ -288,6 +290,9 @@ val の推移(coco_val_dev_cls8 の先頭 500 枚の mask AP。公式の YOLO26-
   5e-5 は 1.49 / 0.64 / 0.64 / 0.66 / 0.77 / 0.61。1e-4 は 5〜10 エポックで一度上がり、5e-5 も途中で上がる。どちらも最後は
   下がるが、val の AP は上がらない
 - 残る違いは、画素どうしで画像全体の情報をやり取りする層(msdeform の deformable な注意 6 層)があるかどうか(原因かは未確認)
+- **追記(exp00102)**: 上の見立ては違っていた。FPN を公式と同じ構成(横からの 1×1 に GN、下の段へ 3×3 + GN + ReLU を通した後の値を
+  渡すなど)にすると、注意の層なしでも test 21.7・voc 25.0 になった。UNet も、decoder に渡す特徴を 3×3 + GN でそろえると test 12.1 に
+  上がった。詳しくは [exp00102 の README](../exp00102_close_impl_gaps/README.md)
 
 以下の「1.」〜「5.」は、統一の条件を決める前に学習したもの(旧条件)の記録。旧条件の違い: 最終の精度を val の dev で報告していた、
 自作は最後の重みで評価していた、自作の RF-DETR-Seg 系と YOLO26-seg 系は方式ごとのデータ拡張、Mask2Former 系は 50 エポック。

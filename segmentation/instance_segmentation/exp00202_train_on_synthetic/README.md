@@ -8,7 +8,7 @@
 | 項目 | 内容 |
 |---|---|
 | 変えるもの | 学習データだけ。(a) COCO の実データ 2k 枚(`coco_train_cls8_2k`。同じ枚数の基準)/ (b) 合成 paste 2k 枚 / (c) 合成 inpaint(全クラスを否定するプロンプト)2k 枚 |
-| 固定するもの | クラス(8 クラス: `lib_common.classes.CLS8`)・モデル(フェーズ C で決めたもの)・学習の長さ・評価(`coco_val_dev_cls8`・`voc_val_cls8`) |
+| 固定するもの | クラス(8 クラス: `lib_common.classes.CLS8`)・モデル(フェーズ C で決めたもの)・学習の長さ・val(`coco_val_dev_cls8`。最良の重みを選ぶ)・test(`coco_val_test_cls8`・`voc_val_cls8`。最終の精度) |
 | わかること | 合成と実データの差、背景の作り方の差 |
 
 最初は 20 クラスで作り始めたが、計画の見直し(instance_segmentation/README.md の「計画の見直し」)で、比較の実験の基本を
