@@ -49,9 +49,13 @@ from segmentation.instance_segmentation.lib_common.data import InstanceDataset, 
 from segmentation.instance_segmentation.lib_common.losses.gtr_criterion import GTRCriterion
 from segmentation.instance_segmentation.lib_common.losses.rfdetr_criterion import targets_from_masks
 from segmentation.instance_segmentation.lib_common.losses.yolo_criterion import YOLOCriterion
+from segmentation.instance_segmentation.lib_common.models.eomt import EoMT
+from segmentation.instance_segmentation.lib_common.optim.musgd import MuSGD
+from segmentation.instance_segmentation.lib_common.models.pmt import PMT
 from segmentation.instance_segmentation.lib_common.models.gtr_seg import GTRSeg
 from segmentation.instance_segmentation.lib_common.models.yolo_seg import YOLOSeg, decode_boxes
 from segmentation.instance_segmentation.lib_common.evaluate import evaluate, save_metrics
+from segmentation.instance_segmentation.lib_common.losses.ifan_criterion import IFANCriterion
 from segmentation.instance_segmentation.lib_common.losses.mask2former_criterion import Mask2FormerCriterion
 from segmentation.instance_segmentation.lib_common.losses.rfdetr_criterion import RFDETRCriterion
 from segmentation.instance_segmentation.lib_common.models.mask2former import Mask2Former
@@ -93,6 +97,11 @@ class TrainConfig:
     num_queries: int = 100
     pixel_decoder: str = "fpn"  # mask2former の pixel decoder("fpn": 簡略版 / "fpn_m2f": 公式の FPN と同じ構成 / "msdeform": 公式と同じ deformable な注意の encoder / "unet")
     mask_pos: str = "none"  # mask2former のマスクを作る画素の特徴に位置の情報を足すか("none" / "sine")
+    gtr_encoder: str = "c2f"  # gtr_seg の encoder("c2f": 公式の GTR と同じ / "hybrid": RT-DETR の hybrid encoder。ECInsSeg と同じ)
+    gtr_mask_loss: str = "points"  # gtr_seg のマスクの損失("points": 公式の GTR と同じ / "box_crop": D-FINE-seg と同じ)
+    ifan: bool = False  # eomt: iFAN(マスクの質の head と、質の BCE・APMR・CLSD の損失、質を使う推論の点数)を足す
+    grad_accum: int = 1  # 1 回の更新(batch_size 枚)を、batch_size / grad_accum 枚のまとめ grad_accum 回に分けて勾配をためる
+    grad_checkpoint: bool = False  # gtr_seg: backbone とマスクの head で gradient checkpointing を使う(結果は同じ、メモリが減り少し遅い)
     seed: int = 0
     max_steps: int | None = None  # 動作確認用(この回数で止める)
     compile: bool = True
@@ -107,12 +116,14 @@ class TrainConfig:
     ema_tau: float = 100.0  # EMA の減衰を最初の更新で小さくする時間の定数(減衰 = ema_decay × (1 − exp(−更新の回数 / tau)))
     multi_scale: bool = False  # まとめ(バッチ)ごとに入力の一辺を batch_scales(size) から選んで拡大縮小する
     eval_resize: str = "pad"  # 評価の変換("pad": transforms.eval_transforms / "square": transforms.square_eval_transforms)
-    optimizer: str = "adamw"  # "adamw" / "sgd"(momentum・nesterov。YOLO 系)
-    momentum: float = 0.937  # sgd の momentum
+    optimizer: str = "adamw"  # "adamw" / "sgd"(momentum・nesterov。YOLO 系)/ "musgd"(YOLO26 の MuSGD。yolo_seg)
+    momentum: float = 0.937  # sgd の momentum(yolo_seg で adamw のときは AdamW の 1 次の moment の係数)
     lrf: float = 0.01  # schedule="linear" の最後の学習率の倍率(warmup の後、1 から lrf へ直線で下げる)
     close_mosaic: int = 0  # 最後のこのエポック数は Mosaic を止める(augmentation="yolo_mosaic" のとき、"yolo" に切り替える)
     flat_frac: float = 0.2  # schedule="flatcosine": warmup の後、学習率を一定にする所までの割合(全部の回数に対して)
     tail_frac: float = 0.0  # schedule="flatcosine": 最後のこの割合は最小の学習率(lr × lrf)のまま
+    backbone_warmup: int = 0  # 0 より大きいと 2 段の warmup(eomt): backbone は最初の warmup 回は 0、その後この回数で上げる
+    llrd: float = 1.0  # eomt: ViT の層ごとの学習率の減衰(最後の層 1、1 つ前の層ほど llrd 倍)
 
 
 # 自作の RF-DETR-Seg を、公式の RF-DETR-Seg の学習の設定(1.12.0 の既定)で学習するときの値(exp のスクリプトで TrainConfig に渡す)。
@@ -125,6 +136,21 @@ class TrainConfig:
 RFDETR_RECIPE = dict(arch="rfdetr_seg", lr=1e-4, backbone_lr_mult=0.735, decoder_lr_mult=0.7, weight_decay=1e-4, clip=0.1,
                      schedule="constant", warmup=0, ema_decay=0.993, ema_tau=100.0, augmentation="rfdetr", multi_scale=True,
                      eval_resize="square", compile=False)
+
+# 自作の EoMT の学習の設定(exp00103 の C)。公式の lightning_module.py・mask_classification_instance.py の既定と
+# configs/dinov2/coco/panoptic/eomt_small_640_2x.yaml の値: AdamW 1e-4・weight decay 0.05(全部の重み)、ViT の層ごとの学習率の
+# 減衰 0.8、2 段の warmup(最初の 500 回は backbone を止めて他を上げ、次の 1,000 回で backbone を上げる)の後 poly(0.9 乗)、
+# 勾配の大きさの上限 0.01、クエリ 200 個、損失は Mask2Former と同じ。backbone は R50 と同じ程度の大きさの ViT-S/16(ImageNet-1K)。
+# データ拡張・評価の変換は統一の条件(lsj・pad)。
+EOMT_RECIPE = dict(arch="eomt", backbone="deit3_small_patch16_224.fb_in1k", num_queries=200, lr=1e-4, weight_decay=0.05,
+                   llrd=0.8, warmup=500, backbone_warmup=1000, clip=0.01, schedule="poly")
+
+# 自作の PMT の学習の設定(exp00103 の E)。公式の lightning_module.py・mask_classification_instance.py の既定と
+# configs/coco/panoptic/pmt_s_640.yaml の値: AdamW 2e-4・weight decay 0.05(学習する全部の重み。encoder は固定)、warmup の後
+# cosine で 0 へ(公式の warmup 6,000 回 / 全部 73,910 回 = 8.1% を、この学習の 12,500 回に割合で合わせて 1,015 回)、
+# 勾配の大きさの上限 0.01、クエリ 200 個、decoder 6 層・MLP 384、損失は Mask2Former と同じ。データ拡張・評価の変換は統一の条件。
+PMT_RECIPE = dict(arch="pmt", backbone="deit3_small_patch16_224.fb_in1k", num_queries=200, lr=2e-4, weight_decay=0.05,
+                  warmup=1015, clip=0.01, schedule="cosine")
 
 # 自作の YOLO26-seg 系の学習の設定。論文(arXiv 2606.03748)の最適化 MuSGD(Muon + SGD)は混ぜ方の値が論文になく、torch の Muon は
 # 2 次元の重みだけ(畳み込みの 4 次元の重みに使えない)なので、YOLO 系の標準の SGD にする(違いとして README に書く)。
@@ -185,7 +211,11 @@ def build_model(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
     elif cfg.arch == "yolo_seg":
         model = YOLOSeg(num_classes, cfg.backbone)
     elif cfg.arch == "gtr_seg":
-        model = GTRSeg(num_classes, cfg.backbone)
+        model = GTRSeg(num_classes, cfg.backbone, encoder=cfg.gtr_encoder, grad_checkpoint=cfg.grad_checkpoint)
+    elif cfg.arch == "eomt":
+        model = EoMT(num_classes, cfg.backbone, cfg.num_queries, img_size=cfg.size, quality_head=cfg.ifan)
+    elif cfg.arch == "pmt":
+        model = PMT(num_classes, cfg.backbone, cfg.num_queries, img_size=cfg.size)
     else:
         raise ValueError(f"知らないモデルの方式: {cfg.arch}")
     return model.cuda().to(memory_format=torch.channels_last)
@@ -206,7 +236,9 @@ def build_criterion(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
     if cfg.arch == "yolo_seg":
         return YOLOCriterion(num_classes).cuda()
     if cfg.arch == "gtr_seg":
-        return GTRCriterion(groups=3).cuda()
+        return GTRCriterion(groups=3, mask_loss=cfg.gtr_mask_loss, checkpoint=cfg.grad_checkpoint).cuda()
+    if cfg.ifan:
+        return IFANCriterion(num_classes).cuda()
     return Mask2FormerCriterion(num_classes).cuda()
 
 
@@ -224,12 +256,29 @@ def build_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.Opt
     Returns:
         AdamW(学習率の記録に使う「backbone 以外の、元の学習率 lr の組」は param_groups[2])。
     """
-    if cfg.optimizer == "sgd":  # YOLO 系: 重み(2 次元以上)だけ weight decay、BN の重みと bias は 0
+    if cfg.optimizer == "sgd" or cfg.arch == "yolo_seg":  # YOLO 系: 重み(2 次元以上)だけ weight decay、BN の重みと bias は 0
         named = list(model.named_parameters())
         groups = [{"params": [p for n, p in named if p.ndim > 1], "weight_decay": cfg.weight_decay},
                   {"params": [p for n, p in named if p.ndim == 1 and not n.endswith(".bias")], "weight_decay": 0.0},
                   {"params": [p for n, p in named if p.ndim == 1 and n.endswith(".bias")], "weight_decay": 0.0}]
-        return torch.optim.SGD(groups, lr=cfg.lr, momentum=cfg.momentum, nesterov=True)
+        if cfg.optimizer == "sgd":
+            return torch.optim.SGD(groups, lr=cfg.lr, momentum=cfg.momentum, nesterov=True)
+        if cfg.optimizer == "musgd":  # exp00102 の Y1: YOLO26 の論文の MuSGD(値は ultralytics の公式の実装と同じ)
+            # 2 次元・4 次元の重みは Muon + SGD(weight decay あり)、BN の重み・bias は SGD だけ(weight decay なし)。
+            # クラスの枝と意味のマスクの枝(公式の cv3・one2one_cv3・semseg)は学習率を 3 倍にする
+            boosted = lambda n: ".cls." in n or n.startswith("proto.semantic")
+            muon = [(n, p) for n, p in named if p.ndim in (2, 4)]
+            rest = [(n, p) for n, p in named if p.ndim not in (2, 4)]
+            groups = []
+            for ps, use_muon, wd in [(muon, True, cfg.weight_decay), (rest, False, 0.0)]:
+                for boost in (False, True):
+                    sel = [p for n, p in ps if boosted(n) == boost]
+                    if sel:
+                        groups.append({"params": sel, "use_muon": use_muon, "weight_decay": wd,
+                                       "lr": cfg.lr * (3 if boost else 1)})
+            return MuSGD(groups, lr=cfg.lr, momentum=cfg.momentum, nesterov=True)
+        # YOLO 系の AdamW(exp00102 の Y1): 公式の ultralytics の AdamW と同じく、1 次の moment の係数に momentum を使う
+        return torch.optim.AdamW(groups, lr=cfg.lr, betas=(cfg.momentum, 0.999), fused=True)
     if cfg.arch == "gtr_seg":  # 公式の正規表現と同じ分け方: 名前に norm・bn・bias を含む重みは weight decay 0
         named = list(model.named_parameters())
         nd = lambda n: any(s in n for s in ("norm", "bn", "bias"))
@@ -240,6 +289,23 @@ def build_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.Opt
                   {"params": [p for n, p in bb if nd(n)], "lr": lr_bb, "weight_decay": 0.0},
                   {"params": [p for n, p in other if not nd(n)], "lr": cfg.lr, "weight_decay": cfg.weight_decay},
                   {"params": [p for n, p in other if nd(n)], "lr": cfg.lr, "weight_decay": 0.0}]
+        return torch.optim.AdamW(groups, fused=True)
+    if cfg.arch == "pmt":  # 公式と同じ: 学習する全部の重み(encoder は固定なので除く)に同じ学習率・weight decay
+        return torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=cfg.lr,
+                                 weight_decay=cfg.weight_decay, fused=True)
+    if cfg.arch == "eomt":  # 公式と同じ: ViT の i 番目の層は lr × llrd^(層の数 − 1 − i)、層より前(埋め込み)は 1 番目の層と同じ、
+        # ViT の最後の LayerNorm とほかの部分は lr。weight decay は全部の重みにかける。backbone の組は 2 段の warmup の対象
+        vit = model.backbone
+        n_blocks = len(vit.blocks)
+        groups = []
+        for n, p in model.named_parameters():
+            mult, is_bb = 1.0, n.startswith("backbone.")
+            if n.startswith("backbone.blocks."):
+                mult = cfg.llrd ** (n_blocks - 1 - int(n.split(".")[2]))
+            elif is_bb and not n.startswith("backbone.norm."):
+                mult = cfg.llrd ** (n_blocks - 1)
+            groups.append({"params": [p], "lr": cfg.lr * mult, "weight_decay": cfg.weight_decay, "backbone": is_bb})
+        groups.sort(key=lambda g: g["backbone"])  # backbone 以外を先に(記録に使う param_groups[2] が元の学習率 lr の組になる)
         return torch.optim.AdamW(groups, fused=True)
     if cfg.arch == "rfdetr_seg":
         named = list(model.named_parameters())
@@ -302,16 +368,20 @@ def build_ema(model: torch.nn.Module, cfg: TrainConfig) -> AveragedModel | None:
 
 def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: int = WARMUP,
                     schedule: str = "poly", lrf: float = 0.01, flat_frac: float = 0.2,
-                    tail_frac: float = 0.0) -> torch.optim.lr_scheduler.LambdaLR:
+                    tail_frac: float = 0.0, backbone_warmup: int = 0) -> torch.optim.lr_scheduler.LambdaLR:
     """学習率の変化: 最初の warmup 回で 0 から上げ、その後 poly(0.9 乗)で 0 に向けて下げる(schedule="constant" なら一定)。
 
     Args:
         optimizer: 最適化。
         total_steps: 学習の全部の回数。
         warmup: 学習率を上げていく回数(0 なら最初から元の学習率)。
-        schedule: "poly" / "constant" / "linear"(1 から lrf へ直線で下げる)/ "flatcosine"(一定の後 cosine で lrf へ)。
+        schedule: "poly" / "constant" / "linear"(1 から lrf へ直線で下げる)/ "flatcosine"(一定の後 cosine で lrf へ)/
+            "cosine"(warmup の後 cosine で 0 へ)。
         lrf: schedule="linear" の最後の倍率 / "flatcosine" の最小の倍率。
         flat_frac, tail_frac: schedule="flatcosine" の一定の所までの割合と、最後の最小のままの割合。
+        backbone_warmup: 0 より大きいと 2 段の warmup(公式の EoMT の TwoStageWarmupPolySchedule。schedule は poly)。
+            param_groups の "backbone" が True の組は、最初の warmup 回は 0、次の backbone_warmup 回で上げ、その後 poly で 0 へ。
+            ほかの組は warmup 回で上げ、その後 poly で 0 へ。
 
     Returns:
         LambdaLR(1 回の更新ごとに step() を呼ぶ)。
@@ -339,8 +409,34 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             return lrf + (1 - lrf) * 0.5 * (1 + math.cos(math.pi * (step - flat) / (total_steps - flat - tail)))
         if schedule == "linear":
             return up * ((1 - step / total_steps) * (1 - lrf) + lrf)
+        if schedule == "cosine":  # 公式の PMT の WarmupCosineSchedule(warmup は直線で 0 から、その後 cosine で 0 へ)
+            if step < warmup:
+                return step / warmup
+            return 0.5 * (1 + math.cos(math.pi * (step - warmup) / max(1, total_steps - warmup)))
         return up * max(0.0, 1 - step / total_steps) ** 0.9
 
+    def two_stage(start: int, length: int):
+        """2 段の warmup の 1 つの組の倍率の関数: start 回まで 0、その後 length 回で 0 から上げ、残りを poly(0.9 乗)で 0 へ。
+
+        Args:
+            start: 0 のままの回数。
+            length: 上げていく回数。
+
+        Returns:
+            更新の回数(0 始まり)から倍率を返す関数。
+        """
+        def f(step: int) -> float:
+            """更新の回数 step(0 始まり)の倍率。"""
+            if step < start:
+                return 0.0
+            if step < start + length:
+                return (step - start) / length
+            return max(0.0, 1 - (step - start - length) / max(1, total_steps - start - length)) ** 0.9
+        return f
+
+    if backbone_warmup > 0:
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, [two_stage(warmup, backbone_warmup) if g.get("backbone")
+                                                             else two_stage(0, warmup) for g in optimizer.param_groups])
     return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
 
 
@@ -374,7 +470,8 @@ def train_one_epoch(forward, model: torch.nn.Module, criterion: torch.nn.Module,
     model.train()
     sums, n = {}, 0
     scales = batch_scales(cfg.size)
-    for batch in loader:
+    accum = cfg.grad_accum  # 1 回の更新に使うまとめの数(まとめは batch_size / accum 枚)
+    for i, batch in enumerate(loader):
         images = batch["image"].cuda(non_blocking=True)  # (B, 3, S, S)
         if cfg.multi_scale:
             s = random.Random(step).choice(scales)
@@ -388,23 +485,29 @@ def train_one_epoch(forward, model: torch.nn.Module, criterion: torch.nn.Module,
             else:
                 outs = forward(images)
         loss, parts = criterion(outs, targets)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip)
-        optimizer.step()
-        scheduler.step()
-        if ema is not None:
-            ema.update_parameters(model)
-        step += 1
+        if i % accum == 0:
+            optimizer.zero_grad(set_to_none=True)
+        (loss / accum).backward()  # accum 回分の勾配をためる(まとめごとの損失の平均の勾配になる)
         rec = {"loss": float(loss.detach()), **parts}
         for k, v in rec.items():
             sums[k] = sums.get(k, 0.0) + v
         n += 1
+        if (i + 1) % accum:
+            continue
+        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip)
+        optimizer.step()
+        scheduler.step()
+        for obj in (model, criterion):  # eomt・pmt: 層ごとの注意のマスクを使う確率 / iFAN: CLSD の重みを、学習の進み方に合わせる
+            if hasattr(obj, "set_progress"):
+                obj.set_progress((step + 1) / total_steps)
+        if ema is not None:
+            ema.update_parameters(model)
+        step += 1
         if step % LOG_EVERY == 0 or step == 1:
             now = time.perf_counter()
             prev_step, prev_t = _LAST_LOG.get("step", 0), _LAST_LOG.get("t", t0)
             # img_per_s は学習を始めてからの平均、recent_img_per_s は前の記録からの速さ(今の速さ)
-            rec |= {"step": step, "epoch": epoch, "lr": optimizer.param_groups[2]["lr"],
+            rec |= {"step": step, "epoch": epoch, "lr": optimizer.param_groups[min(2, len(optimizer.param_groups) - 1)]["lr"],
                     "img_per_s": step * cfg.batch_size / (now - t0),
                     "recent_img_per_s": (step - prev_step) * cfg.batch_size / max(now - prev_t, 1e-9), **timestamp(t0)}
             _LAST_LOG.update(step=step, t=now)
@@ -443,13 +546,14 @@ def predict(model: torch.nn.Module, set_name: str, cfg: TrainConfig, workers: in
                 masks = masks_from_parts(last["mask_parts"])  # (B, Q, mh, mw)
         if cfg.arch in ("rfdetr_seg", "gtr_seg"):
             preds += rfdetr_to_predictions(last["logits"], last["boxes"], masks, batch["meta"],
-                                           pad_size=cfg.size if cfg.eval_resize == "pad" else None)
+                                           pad_size=cfg.size if cfg.eval_resize == "pad" else None,
+                                           crop_to_box=cfg.arch == "gtr_seg" and cfg.gtr_mask_loss == "box_crop")
         elif cfg.arch == "yolo_seg":
             o = out["o2o"]
             preds += yolo_to_predictions(o["logits"], decode_boxes(o["ltrb"], out["anchors"], out["strides"]), o["coef"],
                                          out["protos"], batch["meta"], cfg.size)
         else:
-            preds += to_predictions(out[-1]["logits"], out[-1]["masks"], batch["meta"], cfg.size)
+            preds += to_predictions(out[-1]["logits"], out[-1]["masks"], batch["meta"], cfg.size, out[-1].get("quality"))
     ms = (time.perf_counter() - t0) / len(ds) * 1000
     model.train()
     torch.cuda.empty_cache()
@@ -575,12 +679,13 @@ def train(cfg: TrainConfig) -> dict:
         """
         cls = MosaicInstanceDataset if augmentation == "yolo_mosaic" else InstanceDataset
         ds = cls(cfg.train_json, build_train_transforms(augmentation, cfg.size))
-        return ds, DataLoader(ds, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.workers, collate_fn=collate,
-                              drop_last=True, persistent_workers=True, pin_memory=True)
+        return ds, DataLoader(ds, batch_size=cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=cfg.workers,
+                              collate_fn=collate, drop_last=True, persistent_workers=True, pin_memory=True)
 
     train_ds, loader = make_loader(cfg.augmentation)
-    total = cfg.max_steps or cfg.epochs * len(loader)
-    scheduler = build_scheduler(optimizer, total, cfg.warmup, cfg.schedule, cfg.lrf, cfg.flat_frac, cfg.tail_frac)
+    total = cfg.max_steps or cfg.epochs * (len(loader) // cfg.grad_accum)  # 更新の回数
+    scheduler = build_scheduler(optimizer, total, cfg.warmup, cfg.schedule, cfg.lrf, cfg.flat_frac, cfg.tail_frac,
+                                cfg.backbone_warmup)
     quick = subset_set(cfg.eval_sets[0], cfg.eval_n)
     # データ拡張の後の学習の画像と正解の確認用の画像(変換とマスクがずれていないかを、学習の前に目で確かめるため)
     names = [c["name"] for c in load_set(cfg.eval_sets[0])["categories"]]

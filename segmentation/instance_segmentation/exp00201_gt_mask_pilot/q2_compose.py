@@ -1,20 +1,21 @@
-"""Q2・Q3: 抜き出した物体を合成した画像と正解のマスクを作り、背景の作り方 2 通りで比べる(① 生成だけ。認識モデルは使わない)。
+"""Q2・Q3: 抜き出した物体を合成した画像と正解のマスクを作り、背景の作り方 3 通り(paste・inpaint_full_empty・inpaint_full_noclass)で
+比べる(① 生成だけ。認識モデルは使わない)。
 
 - 物体: Q1c の llm_v3 で生成した物体(runs/q1c/llm_v3/)を、背景の色に合った規則で抜き出し直し、規則で使えると判定したものを使う
 - 場面: 場所(公園・リビングなど)を 1 つ選び、その場所にいそうなクラス(lib_common.synthetic_data.prompts.CONTEXTS)の物体を 1〜4 個置く
   (同じクラスが複数入ってもよい)。置き方・重なり・正解のマスクは lib_common.synthetic_data.compose
 - 背景の作り方:
     paste:   場所だけの画像を生成し(BACKGROUND_TEMPLATE)、物体を貼る
-    inpaint: paste の画像の、物体以外の部分を inpainting で描き直し(strength 1.0)、最後に物体の画素を paste の画像の値に戻す。
-             正解のマスクは paste と同じ(物体の画素は変わらない)。元の背景が残りやすい(inpainting は強さ 1.0 でも元の画像の
-             潜在の表現から始め、マスクは 16 画素のマス目に縮めて混ぜるので、物体の周りのマス目に元の背景が残る)
-    inpaint_full: 物体だけを灰色の無地に置いた画像から、背景を一から inpainting で描く。描き直すマスクを物体の輪郭から 16 画素内側まで
-             広げ、最後に物体を貼ったときの透明度で重ねて戻す(物体の画素・正解のマスクは paste と同じ)
-- 測ること: 1 枚を作る時間、inpainting が物体の画素を(戻す前に)どれだけ変えたか(画素の値の差の平均、0〜255)
+    inpaint_full_{empty,noclass}: 物体だけを灰色の無地に置いた画像から、背景を一から inpainting で描く。描き直すマスクを物体の
+             輪郭から 16 画素内側まで広げ、最後に物体を貼ったときの透明度で重ねて戻す(物体の画素・正解のマスクは paste と同じ)。
+             文面は empty が「場所だけ + 何もいない」(paste の背景と同じ文面)、noclass が「場所だけ + 全クラスを名前で否定」
+             (以前の版の inpaint(paste の画像の物体以外を描き直す)は、元の背景が残りやすいのでやめた)
+    乱数の種は場面の番号で、3 通りとも同じ値を使う(そのため inpaint_full の背景は paste の背景と大まかな配置が似る)
+- 測ること: 1 枚を作る時間(背景の生成・合成・inpainting)
 
 出力:
-    runs/q2/{paste,inpaint}/{番号}.png、runs/q2/{paste,inpaint}.json(COCO 形式の正解。クラスは VOC20 の ID)
-    results/q2_compose.json(まとめ)、results/samples/q2/{番号}.jpg(見本: [paste | paste の正解 | inpaint | inpaint の正解])
+    runs/q2/{paste,inpaint_full_empty,inpaint_full_noclass}/{番号}.png と {同じ名前}.json(COCO 形式の正解。クラスは VOC20 の ID)
+    results/q2_compose.json(まとめ)、results/samples/q2/{番号}_{作り方}{,_gt}.jpg(見本。_gt は正解のマスクを重ねたもの)
 
 使い方: .venv/bin/python -u segmentation/instance_segmentation/exp00201_gt_mask_pilot/q2_compose.py --n 40
 """
@@ -95,9 +96,12 @@ def coco_dict(entries: list[dict]) -> dict:
 
 
 def make_samples(n: int) -> None:
-    """保存した画像と正解から、見本を作る(先頭の n 場面。1 場面につき 4 枚を別のファイルにする)。
+    """保存した画像と正解から、見本を作る(先頭の n 場面。作り方ごとに画像と正解を重ねたものの 2 枚を別のファイルにする)。
 
-    {番号}_paste.jpg / {番号}_paste_gt.jpg / {番号}_inpaint.jpg / {番号}_inpaint_gt.jpg(_gt は正解のマスクを重ねたもの)
+    {番号}_{作り方}.jpg / {番号}_{作り方}_gt.jpg(作り方は VARIANTS。_gt は正解のマスクを重ねたもの)
+
+    Args:
+        n: 見本にする場面の数(先頭から)。
     """
     from lib_common.masks import rle_to_mask
     names = {c["id"]: c["name"] for c in categories(VOC20)}

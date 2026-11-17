@@ -22,7 +22,8 @@ TOP_K = 100
 
 
 @torch.no_grad()
-def to_predictions(logits: torch.Tensor, masks: torch.Tensor, metas: list[dict], size: int) -> list[dict]:
+def to_predictions(logits: torch.Tensor, masks: torch.Tensor, metas: list[dict], size: int,
+                   quality: torch.Tensor | None = None) -> list[dict]:
     """モデルの最終の予測を、COCO の結果の形式の予測の並びにする。
 
     Args:
@@ -30,6 +31,8 @@ def to_predictions(logits: torch.Tensor, masks: torch.Tensor, metas: list[dict],
         masks: マスクの値 (B, Q, h, w)。
         metas: 画像ごとの image_id・orig_size(data.collate の meta)。画像は transforms.eval_transforms で変換したもの。
         size: 入力の一辺の画素数 S。
+        quality: マスクの質の値 (B, Q)(sigmoid の前。iFAN)。あれば、クラスの確率の代わりに (質 × クラスの確率)^2 を使う
+            (iFAN の推論の点数。γ = 2)。
 
     Returns:
         予測の並び。各要素は {"image_id", "category_id"(1 始まり), "segmentation"(RLE), "score"}。
@@ -37,6 +40,8 @@ def to_predictions(logits: torch.Tensor, masks: torch.Tensor, metas: list[dict],
     preds = []
     for i, meta in enumerate(metas):
         prob = logits[i].float().softmax(-1)[:, :-1]  # (Q, K+1) -> (Q, K) 物体なしを除く
+        if quality is not None:
+            prob = (quality[i].float().sigmoid()[:, None] * prob) ** 2  # (Q, K)
         k = prob.shape[1]
         scores, idx = rearrange(prob, "q k -> (q k)").topk(min(TOP_K, prob.numel()))  # (Q × K,) から上位 R 個
         qi, labels = idx // k, idx % k  # (R,) どのクエリの、どのクラスか
@@ -106,7 +111,7 @@ def yolo_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, coef: torch.T
 
 @torch.no_grad()
 def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torch.Tensor, metas: list[dict],
-                          pad_size: int | None = None) -> list[dict]:
+                          pad_size: int | None = None, crop_to_box: bool = False) -> list[dict]:
     """RF-DETR 系(クラスが sigmoid)の最終の予測を、COCO の結果の形式にする(公式の PostProcess と同じ手順)。
 
     1. クラスの確率(sigmoid)を Q × K 個並べ、上位 TOP_K 個(クエリ, クラス)を選ぶ。スコア = その確率
@@ -120,6 +125,8 @@ def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torc
         metas: 画像ごとの image_id・orig_size(data.collate の meta)。
         pad_size: None なら入力は transforms.square_eval_transforms の正方形。数なら transforms.eval_transforms
             (長い辺をこの S にして右と下を埋めた入力。GTR 系など)。
+        crop_to_box: True なら、各マスクの予測の枠の外を 0 にする(D-FINE-seg の cleanup_masks と同じ。枠の中だけでマスクの
+            損失を掛ける学習(GTR 系の mask_loss="box_crop")では、枠の外を学習しないため)。
 
     Returns:
         予測の並び。各要素は {"image_id", "category_id"(1 始まり), "segmentation"(RLE), "score", "bbox"}。
@@ -144,6 +151,12 @@ def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torc
         binary = rearrange(m, "1 r h w -> r h w") > 0  # (R, H, W)
         xywh[:, 2:] = xywh[:, 2:].clamp(min=0)  # 幅・高さが負の枠(GTR 系で起こりうる)は 0 にする
         xywh[:, :2] -= xywh[:, 2:] / 2  # 中心 → 左上
+        if crop_to_box:  # 枠(x0 ≤ x < x1、y0 ≤ y < y1)の外を 0 にする: (R, H, W)
+            xs = torch.arange(w, device=binary.device)[None, None, :]
+            ys = torch.arange(h, device=binary.device)[None, :, None]
+            x0, y0 = xywh[:, 0, None, None], xywh[:, 1, None, None]
+            x1, y1 = x0 + xywh[:, 2, None, None], y0 + xywh[:, 3, None, None]
+            binary = binary & (xs >= x0) & (xs < x1) & (ys >= y0) & (ys < y1)
         for b, s, c, bb in zip(binary.cpu().numpy(), scores.tolist(), labels.tolist(), xywh.tolist()):
             preds.append({"image_id": meta["image_id"], "category_id": c + 1, "segmentation": mask_to_rle(b),
                           "score": s, "bbox": bb})

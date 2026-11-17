@@ -121,9 +121,34 @@ def to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
+def full_mask_cost(parts: dict, i: int, target: torch.Tensor, alpha: float = 0.25, gamma: float = 2.0
+                   ) -> tuple[torch.Tensor, torch.Tensor]:
+    """D-FINE-seg と同じマスクの費用: 1 枚の画像の全部のクエリの予測のマスク(全部の画素)と正解の、focal の形の費用と Dice の費用。
+
+    Args:
+        parts: マスクの材料 {"spatial": (B, C, mh, mw), "query": (B, M, C), "bias"}。
+        i: 画像の番号。
+        target: この画像の正解のマスクを予測の大きさに双線形で縮めたもの (T_i, mh, mw)(0〜1)。
+        alpha, gamma: focal の形の重み(D-FINE-seg の matcher と同じ 0.25・2)。
+
+    Returns:
+        (focal の形の費用 (M, T_i)(画素の数で割る), Dice の費用 (M, T_i))。
+    """
+    logit = torch.einsum("chw,mc->mhw", parts["spatial"][i].float(), parts["query"][i].float()) + parts["bias"].float()
+    logit = rearrange(logit, "m h w -> m (h w)")  # (M, mh·mw)
+    tm = rearrange(target.float(), "t h w -> t (h w)")  # (T_i, mh·mw)
+    p = logit.sigmoid()
+    neg = (1 - alpha) * p ** gamma * (-(1 - p + 1e-8).log())
+    pos = alpha * (1 - p) ** gamma * (-(p + 1e-8).log())
+    focal = (torch.einsum("mp,tp->mt", pos, tm) + torch.einsum("mp,tp->mt", neg, 1 - tm)) / logit.shape[1]
+    dice = 1 - (2 * torch.einsum("mp,tp->mt", p, tm) + 1e-6) / (p.sum(-1, keepdim=True) + tm.sum(-1) + 1e-6)
+    return focal, dice
+
+
+@torch.no_grad()
 def match(out: dict, tg: dict, groups: int,
-          weights: tuple[float, float, float, float, float] = (W_CLASS_COST, W_BBOX, W_GIOU, W_MASK_CE, W_DICE)
-          ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+          weights: tuple[float, float, float, float, float] = (W_CLASS_COST, W_BBOX, W_GIOU, W_MASK_CE, W_DICE),
+          mask_cost: str = "points") -> list[tuple[torch.Tensor, torch.Tensor]]:
     """1 つの出力の割り当て(全部の画像・組の費用をまとめて計算し、CPU へは 1 回だけ移す)。
 
     Args:
@@ -131,7 +156,9 @@ def match(out: dict, tg: dict, groups: int,
             "mask_parts" がない(None の)出力はマスクの費用を使わない(two-stage の encoder の出力など)。
         tg: targets_from_masks の返り値。
         groups: クエリの組の数 G(M = G·Q)。
-        weights: 費用の重み(クラス, 枠 L1, GIoU, マスク BCE, Dice)。既定は RF-DETR の値。
+        weights: 費用の重み(クラス, 枠 L1, GIoU, マスク BCE(mask_cost="full_focal" では focal の形), Dice)。既定は RF-DETR の値。
+        mask_cost: マスクの費用の計算。"points"(既定。画像ごとに選んだ点の BCE と Dice。RF-DETR・GTR と同じ)/
+            "full_focal"(D-FINE-seg と同じ。全部の画素の focal の形の費用と Dice。正解のマスクは予測の大きさに双線形で縮める)。
 
     Returns:
         画像ごとの (クエリの番号 (A_i,), 画像の中での正解の番号 (A_i,))。組ごとに割り当てた結果をつなげたもの。
@@ -150,7 +177,21 @@ def match(out: dict, tg: dict, groups: int,
     giou = generalized_box_iou(to_xyxy(pb), box_convert(tg["boxes"], "cxcywh", "xyxy"))
     cost_giou = -rearrange(giou, "(b m) t -> b m t", b=b)
     cost = w_cls * cost_class + w_bbox * cost_bbox + w_giou * cost_giou  # (B, M, T)
-    if parts is not None:
+    if parts is not None and mask_cost == "full_focal":
+        mh, mw = parts["spatial"].shape[-2:]
+        key = ("masks_small", mh, mw)  # 正解ごとに 1 回だけ縮めて覚えておく(損失の box_crop と同じもの)
+        if key not in tg:
+            tg[key] = F.interpolate(rearrange(tg["masks"].float(), "t h w -> t 1 h w"), size=(mh, mw), mode="bilinear",
+                                    align_corners=False)[:, 0].clamp(0, 1)
+        target = tg[key]  # (T, mh, mw)
+        extra = torch.zeros_like(cost)  # (B, M, T)。画像ごとに、その画像の正解の列だけ埋める(ほかの画像の列は割り当てで使わない)
+        for i in range(b):
+            cols = (tg["owner"] == i).nonzero()[:, 0]
+            if len(cols):
+                focal, dice = full_mask_cost(parts, i, target[cols])
+                extra[i, :, cols] = w_ce * focal + w_dice * dice
+        cost = cost + extra
+    elif parts is not None:
         # マスクの費用: 画像ごとに点を選び、予測(画素の特徴を点で取ってクエリと内積)と正解を同じ点で比べる
         mh, mw = parts["spatial"].shape[-2:]
         n_points = mh * mw // POINT_RATIO

@@ -1,0 +1,40 @@
+{
+  "title": "cv-experiments デモ",
+  "description": "cv-experiments で学習したモデルを、ブラウザの中だけで動かす(ONNX Runtime Web)。動画は YouTube の埋め込み・手元の動画・カメラから選べる。",
+  "repo_url": "https://github.com/pondelion/cv-experiments",
+  "tasks": [
+    {
+      "id": "instance_segmentation",
+      "title": "インスタンスセグメンテーション",
+      "module": "tasks/instance_segmentation.js",
+      "models": [
+        {
+          "id": "gtr_hybrid_r50_cls8_int8",
+          "title": "GTR 系 + hybrid encoder(R50、INT8)",
+          "onnx": "https://huggingface.co/tkyk1234/cv-experiments-models/resolve/main/segmentation/instance_segmentation/gtr_hybrid_r50_cls8_int8.onnx",
+          "format": "gtr_seg",
+          "input_size": 512,
+          "mean": [0.485, 0.456, 0.406],
+          "std": [0.229, 0.224, 0.225],
+          "classes": ["person", "bicycle", "car", "cat", "dog", "bottle", "chair", "tv"],
+          "score_threshold": 0.3,
+          "crop_to_box": false,
+          "info": "segmentation/instance_segmentation/exp00103_latest_methods(A)。COCO の 8 クラス・2,000 枚で学習。exp00302 で重みを INT8 にして小さくした(計算は fp32)"
+        },
+        {
+          "id": "yolo26seg_r50_cls8_int8",
+          "title": "YOLO26-seg 系(R50、INT8)",
+          "onnx": "https://huggingface.co/tkyk1234/cv-experiments-models/resolve/main/segmentation/instance_segmentation/yolo26seg_r50_cls8_int8.onnx",
+          "format": "yolo_seg",
+          "input_size": 512,
+          "mean": [0.485, 0.456, 0.406],
+          "std": [0.229, 0.224, 0.225],
+          "classes": ["person", "bicycle", "car", "cat", "dog", "bottle", "chair", "tv"],
+          "score_threshold": 0.3,
+          "crop_to_box": true,
+          "info": "segmentation/instance_segmentation/exp00101_arch_comparison。COCO の 8 クラス・2,000 枚で学習。exp00302 で重みを INT8 にして小さくした(計算は fp32)"
+        }
+      ]
+    }
+  ]
+}

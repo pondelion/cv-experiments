@@ -23,6 +23,7 @@ import math
 import timm
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from einops import rearrange, repeat
 from torch import nn
 
@@ -352,6 +353,9 @@ class SegmentationHead(nn.Module):
         self.query_block = MLPBlock(D_MODEL)
         self.query_proj = nn.Linear(D_MODEL, D_MODEL)
         self.bias = nn.Parameter(torch.zeros(1))
+        # True なら学習のとき、ブロックの途中の値を保存せず、勾配を計算するときに計算し直す(gradient checkpointing。
+        # 計算の結果は同じで、GPU のメモリが減り、少し遅くなる。stride 4 の大きい特徴を層の数だけ通すので、メモリの多くを占める)
+        self.checkpoint = False
 
     def parts(self, p4: torch.Tensor, queries: list[torch.Tensor], image_size: tuple[int, int],
               skip_blocks: bool = False) -> list[dict]:
@@ -370,7 +374,10 @@ class SegmentationHead(nn.Module):
         out = []
         for i, q in enumerate(queries):
             if not skip_blocks:
-                spatial = self.blocks[i](spatial)
+                if self.checkpoint and self.training and torch.is_grad_enabled():
+                    spatial = torch.utils.checkpoint.checkpoint(self.blocks[i], spatial, use_reentrant=False)
+                else:
+                    spatial = self.blocks[i](spatial)
             out.append({"spatial": self.spatial_proj(spatial), "query": self.query_proj(self.query_block(q)), "bias": self.bias})
         return out
 

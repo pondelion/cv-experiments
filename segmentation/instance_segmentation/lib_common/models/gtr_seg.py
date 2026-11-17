@@ -34,6 +34,7 @@ from einops import rearrange, repeat
 from torch import nn
 from torchvision.ops import box_convert
 
+from segmentation.instance_segmentation.lib_common.models.hybrid_encoder import HybridEncoder
 from segmentation.instance_segmentation.lib_common.models.rfdetr_seg import C2f, ChannelLayerNorm, SegmentationHead
 
 D_MODEL = 256
@@ -384,14 +385,19 @@ class GTRSeg(nn.Module):
         ffn: decoder の FFN の途中の次元(公式の GTR-M は 1024)。
         num_dn: denoising のクエリの数の目安。
         pretrained: backbone に timm の事前学習の重みを読むか。
+        encoder: "c2f"(`Encoder`。公式の GTR と同じ)/ "hybrid"(RT-DETR の hybrid encoder。ECInsSeg と同じ。exp00103 の A)。
+        grad_checkpoint: backbone とマスクの head のブロックで gradient checkpointing を使うか(途中の値を保存せず、勾配を
+            計算するときに計算し直す。計算の結果は同じで、GPU のメモリが減り、少し遅くなる)。
     """
 
     def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", num_queries: int = 300, groups: int = 3,
-                 dec_layers: int = 4, ffn: int = 1024, num_dn: int = 100, pretrained: bool = True):
+                 dec_layers: int = 4, ffn: int = 1024, num_dn: int = 100, pretrained: bool = True, encoder: str = "c2f",
+                 grad_checkpoint: bool = False):
         super().__init__()
         self.num_classes, self.num_queries, self.groups, self.num_dn = num_classes, num_queries, groups, num_dn
         self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True, out_indices=(2, 3, 4))
-        self.encoder = Encoder(self.backbone.feature_info.channels())
+        encoders = {"c2f": Encoder, "hybrid": HybridEncoder}
+        self.encoder = encoders[encoder](self.backbone.feature_info.channels())
         prior = -math.log((1 - 0.01) / 0.01)  # 最初のクラスの確率 0.01
         self.enc_score_head = nn.ModuleList(nn.Linear(D_MODEL, num_classes) for _ in range(groups))
         self.enc_bbox_head = nn.ModuleList(MLP(D_MODEL, D_MODEL, 4, 3) for _ in range(groups))
@@ -420,6 +426,8 @@ class GTRSeg(nn.Module):
             nn.init.zeros_(bb.layers[-1].bias)
         self.lqe = nn.ModuleList(LQE() for _ in range(dec_layers))
         self.seg_head = SegmentationHead(dec_layers)
+        self.seg_head.checkpoint = grad_checkpoint
+        self.backbone.set_grad_checkpointing(grad_checkpoint)
         self.register_buffer("project", distance_bins(), persistent=False)  # (R,)
 
     def _anchors(self, shapes: list[tuple[int, int]], device) -> tuple[torch.Tensor, torch.Tensor]:

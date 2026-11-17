@@ -147,8 +147,10 @@ class Mask2FormerCriterion(nn.Module):
         b, q = logits.shape[:2]
         tgt_classes = torch.full((b, q), self.num_classes, dtype=torch.long, device=logits.device)  # (B, Q) 既定は「物体なし」
         src_masks, tgt_idx = [], []
+        self.last_indices = []  # 画像ごとの (クエリの番号, 全体の中の正解の番号)。損失を足すサブクラス(iFAN)が使う
         for i, (qi, ti) in enumerate(match(logits, masks, labels, tmasks, owner)):
             ti = ti.to(logits.device) + starts[i]  # 全体の中の番号に
+            self.last_indices.append((qi.to(logits.device), ti))
             tgt_classes[i, qi] = labels[ti]
             src_masks.append(masks[i, qi])  # (その画像の正解の数, h, w)
             tgt_idx.append(ti)

@@ -6,7 +6,8 @@
     boxes: 枠の L1 1・GIoU 1(cx, cy, w, h、0〜1)
     local: FGL 0.15(4 辺までの距離の分布を、正解の距離の両隣の 2 つの値に、近さで割った重みで寄せる。重み = IoU)と
            DDF 1.5(途中の層の分布とクラスを、最後の層の分布に KL で寄せる。温度 5)
-    masks: 割り当てたクエリのマスクの点の BCE 5・Dice 5(RF-DETR-Seg と同じ点の選び方)
+    masks: 割り当てたクエリのマスクの点の BCE 5・Dice 5(RF-DETR-Seg と同じ点の選び方)。mask_loss="box_crop" では D-FINE-seg の
+           掛け方(正解の枠の中の全部の画素の BCE・Dice、重み 1・1。GTRCriterion の説明)
 損失をかける出力: decoder の全層、最初の層の前の枠(pre。分布がないので local なし)、two-stage の候補(enc。マスクなし)、
 denoising の全層と pre(割り当ては、作ったときの正解の番号そのまま)。
 boxes と local は、全部の層・pre・enc の割り当ての和(1 つのクエリには最も多くの出力で選ばれた正解)を
@@ -17,6 +18,7 @@ boxes と local は、全部の層・pre・enc の割り当ての和(1 つのク
 """
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from einops import rearrange
 from torch import nn
 from torchvision.ops import box_convert, box_iou, generalized_box_iou
@@ -100,11 +102,20 @@ class GTRCriterion(nn.Module):
 
     Args:
         groups: 学習のときのクエリの組の数 G。
+        mask_loss: マスクの損失の掛け方。"points"(既定。不確かな点を多めに選んだ点の BCE 5・Dice 5。公式の GTR と同じ)/
+            "box_crop"(D-FINE-seg と同じ。予測のマスクの全部の画素のうち正解の枠の中だけの BCE(枠の面積で割る)と Dice、
+            重みは 1・1。正解のマスクは予測の大きさに双線形で縮める。割り当てのマスクの費用も D-FINE-seg と同じく、全部の画素の
+            focal の形の費用 1・Dice 1。クラス・枠の損失と費用は GTR のまま。exp00103 の B)。
+        checkpoint: マスクの損失を gradient checkpointing で包むか(結果は同じで、GPU のメモリが減る)。
     """
 
-    def __init__(self, groups: int = 3):
+    def __init__(self, groups: int = 3, mask_loss: str = "points", checkpoint: bool = False):
         super().__init__()
-        self.groups = groups
+        self.groups, self.mask_loss, self.checkpoint = groups, mask_loss, checkpoint
+        self.w = dict(W, mask=1.0, dice=1.0) if mask_loss == "box_crop" else W  # D-FINE-seg の重み
+        # 割り当てのマスクの費用も D-FINE-seg に合わせる(全部の画素の focal の形の費用 1・Dice 1。クラス・枠の費用は GTR のまま)
+        self.match_weights = MATCH_WEIGHTS[:3] + (1.0, 1.0) if mask_loss == "box_crop" else MATCH_WEIGHTS
+        self.mask_cost = "full_focal" if mask_loss == "box_crop" else "points"
         self.register_buffer("bins", distance_bins(), persistent=False)
 
     @staticmethod
@@ -245,12 +256,40 @@ class GTRCriterion(nn.Module):
         """
         parts = out["mask_parts"]
         dev = parts["query"].device
-        pieces = [torch.einsum("chw,ac->ahw", parts["spatial"][i], parts["query"][i, q.to(dev)])
-                  for i, (q, _) in enumerate(indices) if len(q)]
-        if not pieces:
+        used = [(i, q.to(dev)) for i, (q, _) in enumerate(indices) if len(q)]
+        if not used:
             z = parts["query"].sum() * 0 + parts["spatial"].sum() * 0
             return z, z
-        src = rearrange(torch.cat(pieces) + parts["bias"], "a h w -> a 1 h w").float()  # (A, 1, mh, mw)
+        qv = torch.cat([parts["query"][i, q] for i, q in used])  # (A, C) 割り当てたクエリの特徴
+        args = (parts["spatial"], qv, parts["bias"], [i for i, _ in used], [len(q) for _, q in used], tg, ti, n)
+        if self.checkpoint:
+            # マスクを作るところから損失までを gradient checkpointing で包み、勾配を計算するときに計算し直す(結果は同じで、
+            # GPU のメモリが減る。点の選び方の乱数も、計算し直すときに同じ値に戻る)
+            return torch.utils.checkpoint.checkpoint(self._masks_from_parts, *args, use_reentrant=False)
+        return self._masks_from_parts(*args)
+
+    def _masks_from_parts(self, spatial: torch.Tensor, qv: torch.Tensor, bias: torch.Tensor, images: list[int],
+                          counts: list[int], tg: dict, ti: torch.Tensor, n) -> tuple[torch.Tensor, torch.Tensor]:
+        """マスクの材料から割り当てたクエリのマスクを作り、マスクの損失を計算する(mask_loss で掛け方を変える)。
+
+        Args:
+            spatial: 画素の特徴 (B, C, mh, mw)。
+            qv: 割り当てたクエリの特徴を画像の順につなげたもの (A, C)。
+            bias: マスクのバイアス (1,)。
+            images: qv の区切りごとの画像の番号。
+            counts: qv の区切りごとのクエリの数。
+            tg: targets_from_masks の返り値。
+            ti: 全部の画像をつなげた中での正解の番号 (A,)。
+            n: 損失を割る数。
+
+        Returns:
+            (BCE の損失, Dice の損失)(どちらも 0 次元)。
+        """
+        pieces = [torch.einsum("chw,ac->ahw", spatial[i], q) for i, q in zip(images, qv.split(counts))]  # (A_i, mh, mw)
+        logits = (torch.cat(pieces) + bias).float()  # (A, mh, mw)
+        if self.mask_loss == "box_crop":
+            return self._box_crop_masks(logits, tg, ti, n)
+        src = rearrange(logits, "a h w -> a 1 h w")  # (A, 1, mh, mw)
         n_points = max(src.shape[-2], src.shape[-2] * src.shape[-1] // POINT_RATIO)
         with torch.no_grad():
             coords = uncertain_points(src, n_points)
@@ -259,6 +298,43 @@ class GTRCriterion(nn.Module):
         ce = F.binary_cross_entropy_with_logits(sp, tp, reduction="none").mean(-1).sum() / n
         p = sp.sigmoid()
         dice = (1 - (2 * (p * tp).sum(-1) + 1) / (p.sum(-1) + tp.sum(-1) + 1)).sum() / n
+        return ce, dice
+
+    @staticmethod
+    def _box_crop_masks(logits: torch.Tensor, tg: dict, ti: torch.Tensor, n) -> tuple[torch.Tensor, torch.Tensor]:
+        """D-FINE-seg の掛け方のマスクの損失: 正解の枠の中の画素だけの BCE(枠の面積で割る)と Dice。
+
+        Args:
+            logits: 割り当てたクエリの予測のマスク (A, mh, mw)(sigmoid の前)。
+            tg: targets_from_masks の返り値("masks" (T, S, S)・"boxes" (T, 4) の 0〜1 の cx, cy, w, h を使う)。
+            ti: 全部の画像をつなげた中での正解の番号 (A,)。
+            n: 損失を割る数。
+
+        Returns:
+            (BCE の損失, Dice の損失)(どちらも 0 次元)。
+        """
+        mh, mw = logits.shape[-2:]
+        # 正解のマスクを予測の大きさに双線形で縮める。正解ごとに 1 回だけ縮めて覚えておき(出力ごと・割り当てごとに縮め直すと
+        # 大きい一時的なメモリが要る)、割り当ての番号で取り出す: (T, S, S) -> (T, mh, mw) -> (A, mh, mw)
+        key = ("masks_small", mh, mw)
+        if key not in tg:
+            tg[key] = F.interpolate(rearrange(tg["masks"].float(), "t h w -> t 1 h w"), size=(mh, mw), mode="bilinear",
+                                    align_corners=False)[:, 0].clamp(0, 1)
+        target = tg[key][ti]
+        # 正解の枠を予測のマスクの画素の座標にして、枠の中を 1 にする: (A, mh, mw)
+        x0, y0, x1, y1 = (to_xyxy(tg["boxes"][ti]) * logits.new_tensor([mw, mh, mw, mh])).unbind(-1)  # 4 × (A,)
+        x0, y0 = x0.clamp(0, mw - 1), y0.clamp(0, mh - 1)
+        x1, y1 = x1.clamp(1, mw), y1.clamp(1, mh)
+        xs = torch.arange(mw, device=logits.device, dtype=logits.dtype)
+        ys = torch.arange(mh, device=logits.device, dtype=logits.dtype)
+        inside_x = (xs >= x0[:, None]) & (xs < x1[:, None])  # (A, mw)
+        inside_y = (ys >= y0[:, None]) & (ys < y1[:, None])  # (A, mh)
+        inside = (inside_y[:, :, None] & inside_x[:, None, :]).float()  # (A, mh, mw)
+        area = ((x1 - x0) * (y1 - y0)).clamp(min=1.0)  # (A,)
+        bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")  # (A, mh, mw)
+        ce = ((bce * inside).sum((1, 2)) / area).sum() / n
+        p, t = (logits.sigmoid() * inside).flatten(1), (target * inside).flatten(1)  # (A, mh·mw)
+        dice = (1 - (2 * (p * t).sum(-1) + 1e-6) / (p.sum(-1) + t.sum(-1) + 1e-6)).sum() / n
         return ce, dice
 
     def forward(self, outs: dict, targets: list[dict]) -> tuple[torch.Tensor, dict]:
@@ -275,8 +351,8 @@ class GTRCriterion(nn.Module):
         dev = tg["labels"].device
         g = self.groups if self.training else 1
         layers = outs["layers"]
-        own = [match(o, tg, g, MATCH_WEIGHTS) for o in layers + [outs["pre"]]]  # 層ごと + pre
-        enc_ind = match(outs["enc"], tg, g, MATCH_WEIGHTS)
+        own = [match(o, tg, g, self.match_weights, self.mask_cost) for o in layers + [outs["pre"]]]  # 層ごと + pre
+        enc_ind = match(outs["enc"], tg, g, self.match_weights, self.mask_cost)
         go = union_indices(own + [enc_ind])
         n = torch.tensor(max(len(tg["labels"]) * g, 1), dtype=torch.float, device=dev)
         n_go = torch.tensor(max(sum(len(q) for q, _ in go), 1), dtype=torch.float, device=dev)
@@ -314,7 +390,7 @@ class GTRCriterion(nn.Module):
                     l["ddf"] = self._ddf(o, teacher, gb, gq, gious, cache, is_dn)
             if masks and "mask_parts" in o:
                 l["mask"], l["dice"] = self._masks(o, indices, tg, ti, n_own)
-            total = total + sum(W[k] * v for k, v in l.items())
+            total = total + sum(self.w[k] * v for k, v in l.items())
             return l
 
         last = len(layers) - 1

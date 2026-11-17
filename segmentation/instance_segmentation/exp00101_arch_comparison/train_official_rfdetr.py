@@ -105,7 +105,14 @@ def main() -> None:
     p.add_argument("--size", type=int, default=512)
     p.add_argument("--eval-interval", type=int, default=10)
     p.add_argument("--stage", choices=["data", "train", "eval", "all"], default="all")
+    p.add_argument("--resume", action="store_true",
+                   help="runs/{名前}/last.ckpt(学習が途中で止まったときの重み・最適化の状態)から続きを学習する")
+    p.add_argument("--encoder", default=ENCODER, help="backbone(timm のモデル名に timm/ を付けたもの。既定は R50)")
+    p.add_argument("--out-feature-indexes", type=int, nargs="+", default=None,
+                   help="encoder から使う段・層の番号(省略すると R50 の [2, 3, 4]。ViT は層の番号(0 始まり)。公式の Small の "
+                        "DINOv2 の 3・6・9・12 層目は [2, 5, 8, 11])")
     a = p.parse_args()
+    enc_kw = {"encoder": a.encoder} | ({"out_feature_indexes": a.out_feature_indexes} if a.out_feature_indexes else {})
 
     data_dir = DATASETS_DIR / "rfdetr" / a.train_set
     out_dir = common.RUNS_DIR / a.name
@@ -116,18 +123,18 @@ def main() -> None:
         prepare_split(a.train_set, data_dir / "train")
         prepare_split(subset_set(a.eval_sets[0], 500), data_dir / "valid")
     if a.stage in ("train", "all"):
-        model = RFDETRSegTimm(encoder=ENCODER, resolution=a.size, positional_encoding_size=a.size // 16,
+        model = RFDETRSegTimm(**enc_kw, resolution=a.size, positional_encoding_size=a.size // 16,
                               num_classes=num_classes)
         model.train(dataset_dir=str(data_dir), output_dir=str(out_dir), epochs=a.epochs, batch_size=a.batch_size,
                     grad_accum_steps=a.grad_accum, eval_interval=a.eval_interval, num_workers=8, tensorboard=False,
-                    progress_bar=None)
+                    progress_bar=None, **({"resume": str(out_dir / "last.ckpt")} if a.resume else {}))
     if a.stage in ("eval", "all"):
         ckpt = out_dir / "checkpoint_best_total.pth"
         # 学習したエポック数は、評価だけを回すとき(--epochs の既定の値になる)でもずれないように、学習の設定のファイルから読む
         epochs = json.loads((out_dir / "training_config.json").read_text())["train_config"]["epochs"]
-        model =RFDETRSegTimm(encoder=ENCODER, resolution=a.size, positional_encoding_size=a.size // 16,
+        model = RFDETRSegTimm(**enc_kw, resolution=a.size, positional_encoding_size=a.size // 16,
                               num_classes=num_classes, pretrain_weights=str(ckpt))
-        result = {"name": a.name, "model": f"RF-DETR-Seg (vendor rfdetr 1.12.0 + timm {ENCODER})", "checkpoint": ckpt.name,
+        result = {"name": a.name, "model": f"RF-DETR-Seg (vendor rfdetr 1.12.0 + timm {a.encoder})", "checkpoint": ckpt.name,
                   "train_set": a.train_set, "epochs": epochs, "train_class_images": class_image_counts(str(set_path(a.train_set))),
                   "eval": {}}
         threshold = None
