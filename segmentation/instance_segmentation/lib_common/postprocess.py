@@ -64,6 +64,38 @@ def to_predictions(logits: torch.Tensor, masks: torch.Tensor, metas: list[dict],
 
 
 @torch.no_grad()
+def maskrcnn_to_predictions(outs: list[dict], metas: list[dict], size: int) -> list[dict]:
+    """Mask R-CNN(models/maskrcnn.py。torchvision の後処理で NMS・上位 100 個まで済み)の予測を、COCO の結果の形式にする。
+
+    マスクの確率(入力の大きさ)の、埋めた部分を除いて元の画像の大きさに戻し、0.5 より大きい所を物体にする(detectron2・torchvision と
+    同じ閾値)。スコアは枠のスコア。
+
+    Args:
+        outs: 画像ごとの {"boxes": (N, 4) 入力の画素の x0, y0, x1, y1, "labels": (N,)(1 始まり), "scores": (N,),
+            "masks": (N, 1, S, S) の確率}。
+        metas: 画像ごとの image_id・orig_size(画像は transforms.eval_transforms で変換したもの)。
+        size: 入力の一辺 S。
+
+    Returns:
+        予測の並び。各要素は {"image_id", "category_id", "segmentation", "score", "bbox"}。
+    """
+    preds = []
+    for o, meta in zip(outs, metas):
+        h, w = meta["orig_size"]
+        scale = size / max(h, w)
+        rh, rw = round(h * scale), round(w * scale)
+        m = o["masks"][:, :, :rh, :rw].float()  # (N, 1, rh, rw) 埋めた部分を除く
+        binary = rearrange(F.interpolate(m, size=(h, w), mode="bilinear", align_corners=False), "n 1 h w -> n h w") > 0.5
+        xywh = o["boxes"].float() / scale
+        xywh[:, 2:] -= xywh[:, :2]  # x0, y0, x1, y1 -> x, y, 幅, 高さ
+        for b, s, c, bb in zip(binary.cpu().numpy(), o["scores"].tolist(), o["labels"].tolist(), xywh.tolist()):
+            if b.any():
+                preds.append({"image_id": meta["image_id"], "category_id": c, "segmentation": mask_to_rle(b),
+                              "score": s, "bbox": bb})
+    return preds
+
+
+@torch.no_grad()
 def yolo_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, coef: torch.Tensor, protos: torch.Tensor,
                         metas: list[dict], size: int) -> list[dict]:
     """YOLO 系(o2o の head、NMS なし)の予測を、COCO の結果の形式にする。

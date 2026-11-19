@@ -134,11 +134,12 @@ class Encoder(nn.Module):
     Args:
         cins: backbone の段のチャンネル。
         n: C2f の Bottleneck の数(公式の num_blocks)。
+        dim: 出力の特徴の次元(既定は D_MODEL)。
     """
 
-    def __init__(self, cins: list[int], n: int = 3):
+    def __init__(self, cins: list[int], n: int = 3, dim: int = D_MODEL):
         super().__init__()
-        self.stages = nn.ModuleList(nn.Sequential(C2f(sum(cins), D_MODEL, n=n), ChannelLayerNorm(D_MODEL)) for _ in STRIDES)
+        self.stages = nn.ModuleList(nn.Sequential(C2f(sum(cins), dim, n=n), ChannelLayerNorm(dim)) for _ in STRIDES)
 
     def forward(self, feats: list[torch.Tensor], image_size: tuple[int, int]) -> list[torch.Tensor]:
         """3 段の特徴を作る。
@@ -170,15 +171,17 @@ class MSDeformableAttention(nn.Module):
         heads: 頭の数。
         points: 段ごとの点の数。
         offset_scale: ずれの大きさの倍率。
+        dim: クエリの次元(既定は D_MODEL)。
     """
 
-    def __init__(self, heads: int = 8, points: tuple[int, ...] = NUM_POINTS, offset_scale: float = 0.5):
+    def __init__(self, heads: int = 8, points: tuple[int, ...] = NUM_POINTS, offset_scale: float = 0.5,
+                 dim: int = D_MODEL):
         super().__init__()
         self.heads, self.points, self.offset_scale = heads, list(points), offset_scale
         total = sum(points)
         self.register_buffer("point_scale", torch.tensor([1 / n for n in points for _ in range(n)]))  # (P,)
-        self.sampling_offsets = nn.Linear(D_MODEL, heads * total * 2)
-        self.attention_weights = nn.Linear(D_MODEL, heads * total)
+        self.sampling_offsets = nn.Linear(dim, heads * total * 2)
+        self.attention_weights = nn.Linear(dim, heads * total)
         # 最初の点の置き方(Deformable DETR 系の考え方): 頭ごとに等しい角度で向きを分け、その向きの正方形の辺の上
         # (大きい方の成分が 1)に、段の中の i 番目の点を i 倍の遠さで置く。ずれは問い合わせによらない(重み 0)。
         nn.init.zeros_(self.sampling_offsets.weight)
@@ -217,14 +220,18 @@ class MSDeformableAttention(nn.Module):
 
 
 class Gate(nn.Module):
-    """2 つの入力をゲート(sigmoid)で混ぜて LayerNorm する(D-FINE の残差の代わり)。最初は 0.5 ずつ。"""
+    """2 つの入力をゲート(sigmoid)で混ぜて LayerNorm する(D-FINE の残差の代わり)。最初は 0.5 ずつ。
 
-    def __init__(self):
+    Args:
+        dim: 入力の次元(既定は D_MODEL)。
+    """
+
+    def __init__(self, dim: int = D_MODEL):
         super().__init__()
-        self.gate = nn.Linear(2 * D_MODEL, 2 * D_MODEL)
+        self.gate = nn.Linear(2 * dim, 2 * dim)
         nn.init.zeros_(self.gate.weight)
         nn.init.zeros_(self.gate.bias)  # sigmoid(0) = 0.5(公式の bias_init_with_prob(0.5))
-        self.norm = nn.LayerNorm(D_MODEL)
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         """2 つの入力をゲートで混ぜる。
@@ -247,17 +254,18 @@ class DecoderLayer(nn.Module):
         groups: 学習のときのクエリの組の数 G。
         ffn: FFN の途中の次元。
         heads: 頭の数。
+        dim: クエリの次元(既定は D_MODEL)。
     """
 
-    def __init__(self, groups: int, ffn: int = 1024, heads: int = 8):
+    def __init__(self, groups: int, ffn: int = 1024, heads: int = 8, dim: int = D_MODEL):
         super().__init__()
         self.groups = groups
-        self.self_attn = nn.MultiheadAttention(D_MODEL, heads, batch_first=True)
-        self.norm1 = nn.LayerNorm(D_MODEL)
-        self.cross_attn = MSDeformableAttention(heads)
-        self.gateway = Gate()
-        self.ffn = nn.Sequential(nn.Linear(D_MODEL, ffn), nn.SiLU(), nn.Linear(ffn, D_MODEL))
-        self.norm2 = nn.LayerNorm(D_MODEL)
+        self.self_attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(dim)
+        self.cross_attn = MSDeformableAttention(heads, dim=dim)
+        self.gateway = Gate(dim)
+        self.ffn = nn.Sequential(nn.Linear(dim, ffn), nn.SiLU(), nn.Linear(ffn, dim))
+        self.norm2 = nn.LayerNorm(dim)
 
     def forward(self, tgt: torch.Tensor, ref: torch.Tensor, values: list[torch.Tensor], pos: torch.Tensor,
                 num_dn: int, dn_mask: torch.Tensor | None) -> torch.Tensor:
@@ -277,16 +285,18 @@ class DecoderLayer(nn.Module):
         b = tgt.shape[0]
         q = tgt + pos
         g = self.groups if self.training else 1
+        nw = not getattr(self, "sdpa", False)  # sdpa なら注意の重みを返さない(速い scaled_dot_product_attention を使う。計算は同じ)
         if self.training and g > 1:
             outs = []
             if num_dn:
-                outs.append(self.self_attn(q[:, :num_dn], q[:, :num_dn], tgt[:, :num_dn], attn_mask=dn_mask)[0])
+                outs.append(self.self_attn(q[:, :num_dn], q[:, :num_dn], tgt[:, :num_dn], attn_mask=dn_mask,
+                                           need_weights=nw)[0])
             det = lambda x: rearrange(x[:, num_dn:], "b (g q) c -> (g b) q c", g=g)  # 組を画像の向きに並べる
-            o = self.self_attn(det(q), det(q), det(tgt))[0]
+            o = self.self_attn(det(q), det(q), det(tgt), need_weights=nw)[0]
             outs.append(rearrange(o, "(g b) q c -> b (g q) c", g=g))
             sa = torch.cat(outs, dim=1)
         else:
-            sa = self.self_attn(q, q, tgt)[0]
+            sa = self.self_attn(q, q, tgt, need_weights=nw)[0]
         tgt = self.norm1(tgt + sa)
         tgt = self.gateway(tgt, self.cross_attn(tgt + pos, ref, values))
         return self.norm2((tgt + self.ffn(tgt)).clamp(-65504, 65504))
@@ -388,19 +398,45 @@ class GTRSeg(nn.Module):
         encoder: "c2f"(`Encoder`。公式の GTR と同じ)/ "hybrid"(RT-DETR の hybrid encoder。ECInsSeg と同じ。exp00103 の A)。
         grad_checkpoint: backbone とマスクの head のブロックで gradient checkpointing を使うか(途中の値を保存せず、勾配を
             計算するときに計算し直す。計算の結果は同じで、GPU のメモリが減り、少し遅くなる)。
+        dim: encoder・decoder・マスクの head の特徴の次元(既定は D_MODEL = 256。公式の GTR-Seg の M は 256、S は 192)。
+        enc_expansion: hybrid encoder の CSPBlock の幅の倍率(公式の expansion)。
+        enc_depth: encoder のブロックの繰り返しの数(hybrid の RepBlock・c2f の Bottleneck の数。公式の round(3 × depth_mult))。
+        enc_ffn: hybrid encoder の AIFI の FFN の中間の次元。
+        mask_stride: マスクを作る解像度の、入力に対する縮小の倍率(既定は公式と同じ 4。公式の mask_downsample_ratio)。
+        mask_dim: マスクを作る画素の特徴の次元(None なら dim。exp00104 の E2。rfdetr_seg.SegmentationHead)。
+        enc_block: hybrid encoder の融合のブロックの中の 3×3 のブロック("rep" / "dw"。exp00104 の E3)。
+        sdpa_self_attn: decoder の自己注意で注意の重みを返さず、速い scaled_dot_product_attention を使う(計算は同じ。既定は今まで
+            どおり False。exp00105 の精度重視の学習を速くするため)。
     """
 
     def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", num_queries: int = 300, groups: int = 3,
                  dec_layers: int = 4, ffn: int = 1024, num_dn: int = 100, pretrained: bool = True, encoder: str = "c2f",
-                 grad_checkpoint: bool = False):
+                 grad_checkpoint: bool = False, dim: int = D_MODEL, enc_expansion: float = 0.75, enc_depth: int = 3,
+                 enc_ffn: int = 1024, mask_stride: int = 4, mask_dim: int | None = None, enc_block: str = "rep",
+                 sdpa_self_attn: bool = False):
         super().__init__()
         self.num_classes, self.num_queries, self.groups, self.num_dn = num_classes, num_queries, groups, num_dn
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True, out_indices=(2, 3, 4))
-        encoders = {"c2f": Encoder, "hybrid": HybridEncoder}
-        self.encoder = encoders[encoder](self.backbone.feature_info.channels())
+        # stride 8・16・32 の段を選ぶ(段の番号は backbone によって違う。R50 では (2, 3, 4)。exp00105)
+        reductions = timm.create_model(backbone, pretrained=False, features_only=True).feature_info.reduction()
+        self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True,
+                                          out_indices=tuple(reductions.index(s) for s in STRIDES))
+        cins = self.backbone.feature_info.channels()
+        # 入力はデータの変換で ImageNet の平均・標準偏差で正規化してある。事前学習の正規化が違う backbone(平均・標準偏差 0.5 など)は、
+        # backbone の入口でその正規化に直す(同じなら何もしない。学習の重みには入れない)
+        cfg = self.backbone.pretrained_cfg
+        mean_in, std_in = torch.tensor((0.485, 0.456, 0.406)), torch.tensor((0.229, 0.224, 0.225))
+        mean_bb, std_bb = torch.tensor(cfg.get("mean", mean_in.tolist())), torch.tensor(cfg.get("std", std_in.tolist()))
+        self.renorm = None
+        if not (torch.allclose(mean_bb, mean_in, atol=1e-3) and torch.allclose(std_bb, std_in, atol=1e-3)):
+            scale = std_in / std_bb  # x_bb = (x · std_in + mean_in − mean_bb) / std_bb = x · scale + shift
+            self.register_buffer("renorm_scale", scale.view(1, 3, 1, 1), persistent=False)
+            self.register_buffer("renorm_shift", ((mean_in - mean_bb) / std_bb).view(1, 3, 1, 1), persistent=False)
+            self.renorm = True
+        self.encoder = Encoder(cins, enc_depth, dim) if encoder == "c2f" else \
+            HybridEncoder(cins, enc_expansion, enc_depth, ffn=enc_ffn, dim=dim, block=enc_block)
         prior = -math.log((1 - 0.01) / 0.01)  # 最初のクラスの確率 0.01
-        self.enc_score_head = nn.ModuleList(nn.Linear(D_MODEL, num_classes) for _ in range(groups))
-        self.enc_bbox_head = nn.ModuleList(MLP(D_MODEL, D_MODEL, 4, 3) for _ in range(groups))
+        self.enc_score_head = nn.ModuleList(nn.Linear(dim, num_classes) for _ in range(groups))
+        self.enc_bbox_head = nn.ModuleList(MLP(dim, dim, 4, 3) for _ in range(groups))
         for s, bb in zip(self.enc_score_head, self.enc_bbox_head):
             nn.init.xavier_uniform_(s.weight)
             nn.init.constant_(s.bias, prior)
@@ -409,23 +445,25 @@ class GTRSeg(nn.Module):
                 nn.init.zeros_(layer.bias)
             nn.init.zeros_(bb.layers[-1].weight)
             nn.init.zeros_(bb.layers[-1].bias)
-        self.denoising_class_embed = nn.Embedding(num_classes + 1, D_MODEL, padding_idx=num_classes)
+        self.denoising_class_embed = nn.Embedding(num_classes + 1, dim, padding_idx=num_classes)
         nn.init.normal_(self.denoising_class_embed.weight[:-1])
-        self.query_pos_head = MLP(4, D_MODEL, D_MODEL, 3)
+        self.query_pos_head = MLP(4, dim, dim, 3)
         for layer in self.query_pos_head.layers:
             nn.init.xavier_uniform_(layer.weight)
-        self.pre_bbox_head = MLP(D_MODEL, D_MODEL, 4, 3)
+        self.pre_bbox_head = MLP(dim, dim, 4, 3)
         nn.init.zeros_(self.pre_bbox_head.layers[-1].weight)
         nn.init.zeros_(self.pre_bbox_head.layers[-1].bias)
-        self.layers = nn.ModuleList(DecoderLayer(groups, ffn) for _ in range(dec_layers))
-        self.score_head = nn.ModuleList(nn.Linear(D_MODEL, num_classes) for _ in range(dec_layers))
-        self.bbox_head = nn.ModuleList(MLP(D_MODEL, D_MODEL, 4 * (REG_MAX + 1), 3) for _ in range(dec_layers))
+        self.layers = nn.ModuleList(DecoderLayer(groups, ffn, dim=dim) for _ in range(dec_layers))
+        for layer in self.layers:
+            layer.sdpa = sdpa_self_attn
+        self.score_head = nn.ModuleList(nn.Linear(dim, num_classes) for _ in range(dec_layers))
+        self.bbox_head = nn.ModuleList(MLP(dim, dim, 4 * (REG_MAX + 1), 3) for _ in range(dec_layers))
         for s, bb in zip(self.score_head, self.bbox_head):
             nn.init.constant_(s.bias, prior)
             nn.init.zeros_(bb.layers[-1].weight)
             nn.init.zeros_(bb.layers[-1].bias)
         self.lqe = nn.ModuleList(LQE() for _ in range(dec_layers))
-        self.seg_head = SegmentationHead(dec_layers)
+        self.seg_head = SegmentationHead(dec_layers, dim, mask_stride, mask_dim)
         self.seg_head.checkpoint = grad_checkpoint
         self.backbone.set_grad_checkpointing(grad_checkpoint)
         self.register_buffer("project", distance_bins(), persistent=False)  # (R,)
@@ -478,7 +516,8 @@ class GTRSeg(nn.Module):
         """
         b = images.shape[0]
         image_size = tuple(images.shape[-2:])
-        feats = self.encoder(self.backbone(images), image_size)  # 3 × (B, C, h_l, w_l)
+        x = images * self.renorm_scale + self.renorm_shift if self.renorm else images  # 正規化が違う backbone だけ直す
+        feats = self.encoder(self.backbone(x), image_size)  # 3 × (B, C, h_l, w_l)
         shapes = [tuple(f.shape[-2:]) for f in feats]
         memory = torch.cat([rearrange(f, "b c h w -> b (h w) c") for f in feats], dim=1)  # (B, N, C)
         anchors, valid = self._anchors(shapes, images.device)
@@ -520,8 +559,7 @@ class GTRSeg(nn.Module):
                 layers.append({"logits": logits, "boxes": boxes, "corners": corners, "refs": ref_init})
             # 参照の枠は層ごとに直すが、位置の埋め込みは最初の枠のまま(公式の GTR と同じ)
             corners_prev, ref, out_detach = corners, boxes.detach(), tgt.detach()
-        parts = self.seg_head.parts(feats[0], hidden, image_size)
-        parts = parts if self.training else parts[-1:]
+        parts = self.seg_head.parts(feats[0], hidden, image_size, last_only=not self.training)  # 推論は最後の層の分だけ
         for l, p in zip(layers, parts):
             l["mask_parts"] = p
         split = lambda x: (x[:, :num_dn], x[:, num_dn:])

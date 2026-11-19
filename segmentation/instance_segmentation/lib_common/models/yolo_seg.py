@@ -285,16 +285,20 @@ class YOLOSeg(nn.Module):
         num_classes: クラスの数 K。
         backbone: timm のモデル名。
         pretrained: backbone に timm の事前学習の重みを読むか。
+        widths: neck の出力の段 (P3, P4, P5) のチャンネル(既定は公式の l の版と同じ。公式の s は (128, 256, 512)、
+            n は (64, 128, 256))。
+        depth: neck の C3k2 の Bottleneck の数(既定は l の版の 2。s・n は 1)。
+        proto: 原型のマスクを作る層のチャンネル(既定は l の版の 256。s は 128、n は 64)。
     """
 
-    def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", pretrained: bool = True):
+    def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", pretrained: bool = True,
+                 widths: tuple[int, int, int] = (256, 512, 512), depth: int = 2, proto: int = 256):
         super().__init__()
         self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True, out_indices=(2, 3, 4))
-        self.neck = Neck(tuple(self.backbone.feature_info.channels()))
-        widths = (256, 512, 512)
+        self.neck = Neck(tuple(self.backbone.feature_info.channels()), tuple(widths), depth)
         self.o2m = Head(widths, num_classes)
         self.o2o = copy.deepcopy(self.o2m)
-        self.proto = Proto(widths, num_classes)
+        self.proto = Proto(widths, num_classes, proto)
 
     def forward(self, images: torch.Tensor) -> dict:
         """予測する。

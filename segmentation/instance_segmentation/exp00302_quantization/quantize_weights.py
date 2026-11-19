@@ -4,6 +4,8 @@
 (QuantizeLinear)には対応しない(onnxruntime-web 1.31.1 の docs/webgpu-operators.md)。quantize.py の静的な量子化は途中の値も INT8 に
 するので QuantizeLinear が層ごとに入り、WebGPU では CPU で計算されて遅い。そこで重みだけを INT8 で持ち、使うときに
 DequantizeLinear で fp32 に戻して、計算は fp32 で行う形にする(ファイルの大きさは重みが 1/4 になる分だけ小さくなる)。
+ONNX Runtime は既定では DequantizeLinear を推論のたびに計算するので、使う側でセッションの設定 `session.disable_quant_qdq = 1` を入れて、
+読み込むときに 1 回だけ計算させる(exp00302 の README の「重みを戻す処理」)。
 
 やり方: 畳み込み(Conv・ConvTranspose)と行列の掛け算(MatMul・Gemm)の重みの初期値(2 次元以上・要素が min_size 個以上)を、
 出力のチャンネルごとの対称な INT8(scale = そのチャンネルの絶対値の最大 / 127、zero point 0)にし、元の名前を出力にする

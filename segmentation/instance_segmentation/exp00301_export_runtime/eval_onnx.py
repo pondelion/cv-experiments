@@ -29,13 +29,15 @@ from segmentation.instance_segmentation.lib_common.postprocess import (rfdetr_to
 from segmentation.instance_segmentation.lib_common.transforms import eval_transforms  # noqa: E402
 
 
-def make_session(path: str, provider: str, tf32: bool):
+def make_session(path: str, provider: str, tf32: bool, disable_qdq: bool = False):
     """ONNX Runtime の推論のセッションを作る。
 
     Args:
         path: ONNX のパス。
         provider: "cuda" / "cpu"。
         tf32: CUDA で TF32(少し粗い精度の行列の掛け算)を使うか。
+        disable_qdq: セッションの設定 `session.disable_quant_qdq = 1` を入れる(重みだけ INT8 の DequantizeLinear を読み込むときに
+            1 回だけ計算する。ブラウザのデモと同じ。exp00302 の README の「重みを戻す処理」)。
 
     Returns:
         onnxruntime.InferenceSession。
@@ -47,7 +49,10 @@ def make_session(path: str, provider: str, tf32: bool):
         pass
     providers = [("CUDAExecutionProvider", {"use_tf32": "1" if tf32 else "0"})] if provider == "cuda" \
         else ["CPUExecutionProvider"]
-    return ort.InferenceSession(path, providers=providers)
+    so = ort.SessionOptions()
+    if disable_qdq:
+        so.add_session_config_entry("session.disable_quant_qdq", "1")
+    return ort.InferenceSession(path, so, providers=providers)
 
 
 def predict(sess, arch: str, set_name: str, size: int) -> list[dict]:
@@ -81,11 +86,13 @@ def main() -> None:
     p.add_argument("--onnx", required=True)
     p.add_argument("--provider", choices=["cuda", "cpu"], default="cuda")
     p.add_argument("--tf32", type=int, choices=[0, 1], default=0)
+    p.add_argument("--disable-qdq", type=int, choices=[0, 1], default=0,
+                   help="1: session.disable_quant_qdq を入れる(重みだけ INT8 の ONNX を、ブラウザのデモと同じ設定で動かす)")
     p.add_argument("--name", required=True, help="結果の名前(results/{名前}.json)")
     p.add_argument("--eval-sets", nargs="+", default=["coco_val_dev_cls8", "coco_val_test_cls8", "voc_val_cls8"])
     a = p.parse_args()
     cfg = json.loads((Path(a.run) / "config.json").read_text())
-    sess = make_session(a.onnx, a.provider, bool(a.tf32))
+    sess = make_session(a.onnx, a.provider, bool(a.tf32), bool(a.disable_qdq))
     results, threshold = {}, None
     for s in a.eval_sets:  # 最初のセットで PQ などの閾値を選び、ほかのセットにはその値を使う(学習のときと同じ)
         m = evaluate(s, predict(sess, cfg["arch"], s, cfg["size"]), score_threshold=threshold)
@@ -96,7 +103,7 @@ def main() -> None:
     common.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     save_metrics(common.RESULTS_DIR / f"{a.name}.json",
                  {"name": a.name, "run": Path(a.run).name, "onnx": Path(a.onnx).name, "provider": a.provider,
-                  "tf32": bool(a.tf32), "eval": results})
+                  "tf32": bool(a.tf32), "disable_qdq": bool(a.disable_qdq), "eval": results})
 
 
 if __name__ == "__main__":

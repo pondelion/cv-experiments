@@ -35,12 +35,12 @@ exp00101 の統一の条件(train `coco_train_cls8_2k`、val `coco_val_dev_cls8`
 | D | C に iFAN の 2 つの仕組みを足す | C | iFAN の効果 |
 | E | PMT を、C と同じ ViT-S/16(ImageNet-1K)で作る。論文どおり ViT は固定し、decoder だけを学習する | C(EoMT) | 「固定した ViT + 素直な decoder」の良し悪し(ViT を学習する EoMT との比較) |
 | F | 公式の RF-DETR-Seg(`vendor/rf-detr`)の backbone を、C〜E と同じ ViT-S/16(ImageNet-1K)にする(公式はもともと DINOv2 の ViT。exp00101 では R50 に差し替えた)。使う層は公式の Small と同じ位置(12 層のうち 3・6・9・12 層目)、特徴の stride 16(窓に分けない)。GPU のメモリを抑えるため 4 枚 × 4 回の勾配の累積(1 回の更新あたり 16 枚) | 公式の RF-DETR-Seg(R50、exp00101。test 26.3) | C〜E が R50 の方式より低いのが ViT の backbone のためか(同じ ViT-S で、ViT 前提ではない方式も下がるか) |
-| (未定) | Mask R-CNN(torchvision の実装、backbone は timm の R50) | - | 古典の方式の参考の値。採用の候補ではない。入れるかは未定 |
+| G | Mask R-CNN(torchvision の改良版の構成 `maskrcnn_resnet50_fpn_v2` と同じ。backbone だけ timm の R50(ImageNet-1K)にし、ほかはゼロから学習。`lib_common/models/maskrcnn.py`、`--arch maskrcnn`)。学習の設定は detectron2 の new baselines(`mask_rcnn_R_50_FPN_100ep_LSJ`。LSJ で 100 エポックの条件がこの比較と同じ): SGD 0.025(公式の 0.1 を 64 枚 → 16 枚に合わせる)・momentum 0.9・weight decay 4e-5、warmup の後 88.9%・96.3% で 1/10(`lib_common/train.py` の `MASKRCNN_RECIPE`) | - | 古典の方式から最新の方式までで、同じ backbone でどれだけ伸びたか(参考の値。採用の候補ではない) |
 
 扱わないもの:
 
 - ECInsSeg の backbone の蒸留: 論文の中心は backbone(小さい ViT を DINOv3 系の先生から蒸留して作る)で、backbone の作り方の比較に
-  あたるので、backbone を比べる exp00104 で扱う(backbone より後の部分は A で確かめる)
+  あたるので、backbone を比べる exp00105 で扱う(backbone より後の部分は A で確かめる)
 - Poly-DETR: 著者自身が同じ条件で比べたマスクの版より、多角形の版の精度が低い(自前の Deformable DETR 系、R50・12 エポック・COCO val で
   37.8 と 39.8、RF-DETR-M で 43.2 と 44.6)。多角形の版の利点として挙げているのは高い解像度でのメモリと速さ(Cityscapes 1024×2048 で
   メモリ 46.5% 減、10 → 15 FPS)で、入力 512 のこの exp の条件では、精度が下がって利点が出ない見込みのため。高い解像度での推論の
@@ -55,7 +55,7 @@ C の注:
   ViT-L では 1.1 だが ViT-S では 5.8。ViT-L の事前学習を DINOv2 から ImageNet-1K にすると、差が 1.1 から 6.1 に広がる)。
   この exp の ViT-S・ImageNet-1K はその下がる条件にあたるので、結果が低くても EoMT 本来の良し悪し(大きく強い事前学習の ViT での
   良し悪し)とは言えない
-- DINOv3 など強い事前学習の backbone は exp00104(backbone の比較)で扱うので、ここでは使わない
+- DINOv3 など強い事前学習の backbone は exp00105(backbone の比較)で扱うので、ここでは使わない
 - E(PMT)も同じ注意があてはまる。論文は、PMT も小さい ViT・弱い事前学習で下がると報告している(COCO の panoptic の PQ で、
   ViT-S は ViT-Adapter + Mask2Former より 4.3 低い。ViT-L の事前学習を ImageNet-1K にすると 44.6 と 47.0)
 
@@ -156,6 +156,29 @@ val の推移(A と B を、基準の GTR 系と並べる。B の val は学習�
 - 切り抜きなしの評価は、最初に推論の処理を D-FINE-seg に合わせていなかったときの結果(切り抜きの処理を足して、保存した重みで
   評価し直した)
 
+### C: EoMT(ViT-S/16、ImageNet-1K)
+
+| test のセット | 方式 | mask AP | AP50 | AP75 | APs / APm / APl | box AP | PQ | SQ | 最良の重み |
+|---|---|---|---|---|---|---|---|---|---|
+| coco_val_test_cls8 | EoMT(ViT-S) | 18.2 | 30.2 | 19.3 | 1.5 / 12.5 / 36.4 | 19.5 | 28.0 | 76.4 | 100 エポック目 |
+| coco_val_test_cls8 | (参考)自作の GTR 系(R50、exp00101) | 30.3 | 48.1 | 32.8 | 6.6 / 32.5 / 50.1 | 32.0 | 39.7 | 81.2 | 100 |
+| coco_val_test_cls8 | (参考)自作の Mask2Former 系(R50・msdeform、exp00101) | 26.8 | 42.0 | 29.2 | 4.2 / 26.9 / 48.4 | 27.8 | 36.8 | 79.2 | 90 |
+| voc_val_cls8 | EoMT(ViT-S) | 26.4 | 41.7 | 28.3 | 2.6 / 14.7 / 43.4 | 33.7 | 37.5 | 77.5 | 100 |
+| voc_val_cls8 | (参考)自作の GTR 系(R50、exp00101) | 36.1 | 56.3 | 39.5 | 10.0 / 28.5 / 50.5 | 45.7 | 47.2 | 79.1 | 100 |
+| voc_val_cls8 | (参考)自作の Mask2Former 系(R50・msdeform、exp00101) | 34.3 | 52.4 | 37.0 | 9.0 / 26.6 / 52.5 | 41.8 | 44.3 | 79.3 | 90 |
+
+val の推移: 10 エポックごとに 10.8・15.6・18.8・19.2・20.0・21.5・21.3・22.0・21.9・22.2。
+クラスごとの mask AP(test): person 14.7・bicycle 5.6・car 6.3・cat 59.9・dog 31.5・bottle 3.2・chair 1.2・tv 23.0。
+学習の速さ: 72.7 枚/秒(開始からの平均。exp00101 の自作の方式は 27〜45 枚/秒)。
+
+- EoMT(ViT-S・ImageNet-1K)は test 18.2・voc 26.4 で、R50 の自作の方式(GTR 系 30.3・Mask2Former 系 26.8)より低い。
+  特に小さい・中くらいの物体(APs 1.5、APm 12.5)が低く、大きい物体(APl 36.4)との差が大きい。ViT-S/16 は stride 16 の 1 段の特徴
+  だけから stride 4 まで上げてマスクを作るので、細かい物体に弱いと見られる(未確認)
+- 上の「C の注」のとおり、この条件(小さい ViT・ImageNet-1K の事前学習)は論文で EoMT が大きく下がると報告されている条件で、
+  backbone の種類(ViT と CNN)も違う。EoMT 本来の良し悪しとは言えない。強い事前学習の ViT での比較は exp00105 で行う
+- 学習は最も速い(72.7 枚/秒)。pixel decoder・transformer decoder がない構成の効果
+- val は 100 エポック目が最良で、まだ少し上がっている
+
 ### D: EoMT に iFAN を足す
 
 | test のセット | 方式 | mask AP | AP50 | AP75 | APs / APm / APl | box AP | PQ | SQ | 最良の重み |
@@ -195,6 +218,57 @@ val の推移(C・D・E を、参考の R50 の GTR 系と並べる):
 - R50 の方式(26〜32)よりは大きく低い。小さい物体(APs 1.2)が特に低いのは EoMT と同じ(stride 16 の 1 段の特徴から作るため、と
   見ている。未確認)
 
+### F: 公式の RF-DETR-Seg の backbone を ViT-S/16(ImageNet-1K)にする
+
+| test のセット | backbone | mask AP | AP50 | AP75 | APs / APm / APl | box AP | PQ | SQ | 最良の重み |
+|---|---|---|---|---|---|---|---|---|---|
+| coco_val_test_cls8 | R50(exp00101) | 26.3 | 44.7 | 27.7 | 4.6 / 28.2 / 45.5 | 28.6 | 37.8 | 79.0 | 90 エポック目 |
+| coco_val_test_cls8 | ViT-S/16 | 25.5 | 42.2 | 27.1 | 4.7 / 24.2 / 44.5 | 27.5 | 37.4 | 78.5 | 100 |
+| voc_val_cls8 | R50(exp00101) | 31.9 | 53.3 | 33.8 | 5.9 / 27.4 / 44.8 | 39.2 | 44.8 | 79.1 | 90 |
+| voc_val_cls8 | ViT-S/16 | 32.5 | 51.1 | 34.8 | 4.9 / 24.0 / 47.2 | 40.6 | 44.3 | 79.3 | 100 |
+
+val の推移(EMA の重み、10 エポックごと): R50 7.8・11.1・14.6・20.2・23.3・26.5・27.7・28.3・28.8・28.3、
+ViT-S 6.9・14.4・21.2・24.5・26.8・27.4・27.9・28.3・29.2・29.3。
+クラスごとの mask AP(test、ViT-S): person 23.6・bicycle 9.7・car 14.6・cat 62.8・dog 41.2・bottle 8.1・chair 4.3・tv 40.1。
+学習は途中(25 エポック目)で一度止まり、公式の続きから学習する機能(`--resume`、最後の保存 `last.ckpt` から)で続けた。
+
+![](results/curves/compare_rfdetr_val_curve.png)
+
+![](results/curves/compare_rfdetr_per_class.png)
+
+- 同じ ViT-S にしても、公式の RF-DETR-Seg は R50 とほぼ同じ(test −0.8、voc +0.6、val +0.5。どれもぶれ 1 前後の範囲)
+- 同じ ViT-S・同じ事前学習で、EoMT・PMT(C〜E)は R50 の方式より 10 前後低いが、RF-DETR-Seg は下がらない。C〜E が低いのは
+  ViT の backbone そのもののためではなく、ViT が前提の方式の作りの側にあると見られる。違いとして考えられるのは、RF-DETR-Seg は ViT の
+  4 つの層の特徴を使い、特徴を作り直す部分と decoder を持つのに対し、EoMT・PMT は ViT の最後の特徴だけから作ること(確かめていない)
+
+### G: Mask R-CNN(古典の方式の参考の値)
+
+| test のセット | 方式 | mask AP | AP50 | AP75 | APs / APm / APl | box AP | PQ | SQ | 最良の重み |
+|---|---|---|---|---|---|---|---|---|---|
+| coco_val_test_cls8 | **GTR 系 + hybrid encoder(A)** | **31.8** | 49.3 | 35.1 | 6.8 / 35.6 / 53.1 | 34.4 | 41.2 | 81.7 | 70 エポック目 |
+| coco_val_test_cls8 | Mask R-CNN | 29.6 | 49.9 | 31.8 | **9.1** / 33.5 / 46.7 | 30.9 | 41.8 | 79.5 | 100 |
+| voc_val_cls8 | **GTR 系 + hybrid encoder(A)** | **38.4** | 58.3 | 42.1 | 11.9 / 31.5 / 53.3 | 48.7 | 48.4 | 79.5 | 70 |
+| voc_val_cls8 | Mask R-CNN | 33.4 | 56.4 | 36.3 | 8.5 / 29.0 / 45.2 | 42.7 | 46.4 | 77.4 | 100 |
+
+val の推移: 11.4・23.5・28.6・29.6・30.0・30.6・32.5・32.8・34.6・35.1(学習率を 1/10 にする 89 エポック目の後に 32.8 → 34.6)。
+クラスごとの mask AP(test): person 29.2・bicycle 11.2・car 19.8・cat 61.4・dog 46.4・bottle 18.2・chair 6.5・tv 44.0。
+学習の速さ: 52.0 枚/秒。計算量(入力 512、推論): 全体 242 GMACs(1,000 個の候補の枠ごとの box の head と、100 個の検出ごとの
+マスクの head が大半。GTR 系 + hybrid encoder は 40.2)、パラメータ 4,590 万。
+
+![](results/curves/compare_maskrcnn_val_curve.png)
+
+![](results/curves/compare_maskrcnn_per_class.png)
+
+- test では、最新の方式の上位 3 つ(GTR 系 + hybrid encoder 31.8、YOLO26-seg 系 30.7、GTR 系 30.3)より低い(GTR 系 + hybrid encoder より
+  test −2.2、voc −5.0)。Mask2Former 系(26.8)・RF-DETR-Seg 系(27.3)よりは高い
+- val(dev の先頭 500 枚)では 35.1 で GTR 系 + hybrid encoder(35.4)に近いが、test との差が大きい(val − test が 5.5。GTR 系 + hybrid
+  encoder は 3.6)。val だけで比べると、古典の方式と最新の方式の差を小さく見誤る
+- 物体の大きさで違いが出る: 小さい物体は Mask R-CNN の方が高い(APs 9.1 と 6.8)が、大きい物体は大きく低い(APl 46.7 と 53.1)。
+  Mask R-CNN は候補の枠ごとに 28 × 28 でマスクを作るので、大きい物体の輪郭が粗くなるためと見ている(確かめていない)
+- 計算量は GTR 系 + hybrid encoder の約 6 倍で、精度は低い。同じ R50・少ないデータ(2,000 枚)でも、最新の方式の上位は古典の方式を
+  上回るが、差は 2 前後と小さい。差がデータの量・backbone でどう変わるかは、exp00105(backbone)・exp00108(データの量)でも
+  Mask R-CNN を比べる相手に入れて確かめる
+
 ## まとめ
 
 | 方式 | backbone | test | voc |
@@ -203,6 +277,9 @@ val の推移(C・D・E を、参考の R50 の GTR 系と並べる):
 | 自作の YOLO26-seg 系(exp00101) | R50 | 30.7 | 35.7 |
 | 自作の GTR 系 + D-FINE-seg のマスクの損失(B、枠で切り抜く) | R50 | 30.5 | 34.8 |
 | 自作の GTR 系(exp00101) | R50 | 30.3 | 36.1 |
+| Mask R-CNN(G。古典の方式の参考) | R50 | 29.6 | 33.4 |
+| 公式の RF-DETR-Seg(exp00101) | R50 | 26.3 | 31.9 |
+| 公式の RF-DETR-Seg(F) | ViT-S(ImageNet-1K) | 25.5 | 32.5 |
 | EoMT + iFAN(D) | ViT-S(ImageNet-1K) | 19.5 | 26.6 |
 | PMT(E。ViT は固定) | ViT-S(ImageNet-1K) | 19.1 | 26.0 |
 | EoMT(C) | ViT-S(ImageNet-1K) | 18.2 | 26.4 |
@@ -210,31 +287,12 @@ val の推移(C・D・E を、参考の R50 の GTR 系と並べる):
 - 2026-11 時点の候補のうち、効いたのは ECInsSeg の hybrid encoder(A)だけで、自作の GTR 系に入れると test +1.5・voc +2.3 で
   最も高くなった。フェーズ C の基準の方式の候補は「自作の GTR 系 + hybrid encoder」
 - D-FINE-seg のマスクの損失(B)は、マスクの精度では効果なし(box AP は上がる)
+- 古典の Mask R-CNN(G)は test 29.6 で、最新の方式の上位(GTR 系 + hybrid encoder 31.8)より低いが、差は 2 前後と小さい
+  (計算量は約 6 倍)。少ないデータでは最新の方式の強みが出にくい可能性があるので、exp00105・exp00108 でも比べる相手に入れる
 - ViT が前提の方式(EoMT・PMT、iFAN)は、R50 と同じ程度の大きさ・同じ事前学習のデータの ViT-S では、R50 の方式より 10 前後低い。
   論文が「小さい ViT・弱い事前学習で大きく下がる」と報告している条件なので、方式そのものの良し悪しとは言えない。強い事前学習の
-  ViT(DINOv3 など)では exp00104 で改めて比べる。その中では、iFAN は +1.3(論文と同じ程度)、PMT は ViT を固定しても EoMT と同じ程度
+  ViT(DINOv3 など)では exp00105 で改めて比べる。その中では、iFAN は +1.3(論文と同じ程度)、PMT は ViT を固定しても EoMT と同じ程度
+- 同じ ViT-S でも、公式の RF-DETR-Seg(F)は R50 とほぼ同じ精度。この条件でも ViT-S の backbone そのものは R50 と同じ程度に
+  使えるので、EoMT・PMT が低い理由は方式の作りの側にあると見られる(どの部分かは確かめていない)
 - 学習の速さは ViT の方式が速い(EoMT 72.7 枚/秒、PMT 59.6 枚/秒。R50 の方式は 13〜45 枚/秒。ただし GPU をほかの学習と分け合った
   時間を含み、A・B は gradient checkpointing と勾配の累積も使っているので、正確な比較ではない)
-
-### C: EoMT(ViT-S/16、ImageNet-1K)
-
-| test のセット | 方式 | mask AP | AP50 | AP75 | APs / APm / APl | box AP | PQ | SQ | 最良の重み |
-|---|---|---|---|---|---|---|---|---|---|
-| coco_val_test_cls8 | EoMT(ViT-S) | 18.2 | 30.2 | 19.3 | 1.5 / 12.5 / 36.4 | 19.5 | 28.0 | 76.4 | 100 エポック目 |
-| coco_val_test_cls8 | (参考)自作の GTR 系(R50、exp00101) | 30.3 | 48.1 | 32.8 | 6.6 / 32.5 / 50.1 | 32.0 | 39.7 | 81.2 | 100 |
-| coco_val_test_cls8 | (参考)自作の Mask2Former 系(R50・msdeform、exp00101) | 26.8 | 42.0 | 29.2 | 4.2 / 26.9 / 48.4 | 27.8 | 36.8 | 79.2 | 90 |
-| voc_val_cls8 | EoMT(ViT-S) | 26.4 | 41.7 | 28.3 | 2.6 / 14.7 / 43.4 | 33.7 | 37.5 | 77.5 | 100 |
-| voc_val_cls8 | (参考)自作の GTR 系(R50、exp00101) | 36.1 | 56.3 | 39.5 | 10.0 / 28.5 / 50.5 | 45.7 | 47.2 | 79.1 | 100 |
-| voc_val_cls8 | (参考)自作の Mask2Former 系(R50・msdeform、exp00101) | 34.3 | 52.4 | 37.0 | 9.0 / 26.6 / 52.5 | 41.8 | 44.3 | 79.3 | 90 |
-
-val の推移: 10 エポックごとに 10.8・15.6・18.8・19.2・20.0・21.5・21.3・22.0・21.9・22.2。
-クラスごとの mask AP(test): person 14.7・bicycle 5.6・car 6.3・cat 59.9・dog 31.5・bottle 3.2・chair 1.2・tv 23.0。
-学習の速さ: 72.7 枚/秒(開始からの平均。exp00101 の自作の方式は 27〜45 枚/秒)。
-
-- EoMT(ViT-S・ImageNet-1K)は test 18.2・voc 26.4 で、R50 の自作の方式(GTR 系 30.3・Mask2Former 系 26.8)より低い。
-  特に小さい・中くらいの物体(APs 1.5、APm 12.5)が低く、大きい物体(APl 36.4)との差が大きい。ViT-S/16 は stride 16 の 1 段の特徴
-  だけから stride 4 まで上げてマスクを作るので、細かい物体に弱いと見られる(未確認)
-- 上の「C の注」のとおり、この条件(小さい ViT・ImageNet-1K の事前学習)は論文で EoMT が大きく下がると報告されている条件で、
-  backbone の種類(ViT と CNN)も違う。EoMT 本来の良し悪しとは言えない。強い事前学習の ViT での比較は exp00104 で行う
-- 学習は最も速い(72.7 枚/秒)。pixel decoder・transformer decoder がない構成の効果
-- val は 100 エポック目が最良で、まだ少し上がっている

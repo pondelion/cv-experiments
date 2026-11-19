@@ -344,21 +344,29 @@ class SegmentationHead(nn.Module):
 
     Args:
         layers: decoder の層の数(ブロックの数)。
+        dim: 入力の特徴とクエリの次元(既定は D_MODEL)。
+        stride: マスクを作る解像度の、入力に対する縮小の倍率(既定は公式と同じ 4。公式の mask_downsample_ratio)。
+        mask_dim: マスクを作る画素の特徴の次元(None なら dim のまま。公式と同じ)。小さくすると、拡大する前の粗い解像度で
+            1×1 の畳み込みで次元を落としてから拡大し、細かい解像度のブロックと内積をこの次元で計算する(解像度は変えずに、
+            細かい解像度での計算を減らす。YOLACT・YOLO 系の原型のマスクが 32 チャンネルで作るのと同じ考え方。exp00104 の E2)。
     """
 
-    def __init__(self, layers: int):
+    def __init__(self, layers: int, dim: int = D_MODEL, stride: int = 4, mask_dim: int | None = None):
         super().__init__()
-        self.blocks = nn.ModuleList(DepthwiseConvBlock(D_MODEL) for _ in range(layers))
-        self.spatial_proj = nn.Conv2d(D_MODEL, D_MODEL, 1)
-        self.query_block = MLPBlock(D_MODEL)
-        self.query_proj = nn.Linear(D_MODEL, D_MODEL)
+        self.stride = stride
+        m = mask_dim or dim
+        self.reduce = nn.Conv2d(dim, m, 1) if mask_dim else nn.Identity()  # 拡大する前に次元を落とす
+        self.blocks = nn.ModuleList(DepthwiseConvBlock(m) for _ in range(layers))
+        self.spatial_proj = nn.Conv2d(m, m, 1)
+        self.query_block = MLPBlock(dim)
+        self.query_proj = nn.Linear(dim, m)
         self.bias = nn.Parameter(torch.zeros(1))
         # True なら学習のとき、ブロックの途中の値を保存せず、勾配を計算するときに計算し直す(gradient checkpointing。
         # 計算の結果は同じで、GPU のメモリが減り、少し遅くなる。stride 4 の大きい特徴を層の数だけ通すので、メモリの多くを占める)
         self.checkpoint = False
 
     def parts(self, p4: torch.Tensor, queries: list[torch.Tensor], image_size: tuple[int, int],
-              skip_blocks: bool = False) -> list[dict]:
+              skip_blocks: bool = False, last_only: bool = False) -> list[dict]:
         """層ごとのマスクの材料(画素の特徴・クエリの特徴・バイアス)を作る。
 
         Args:
@@ -366,11 +374,15 @@ class SegmentationHead(nn.Module):
             queries: 層ごとのクエリ (B, M, C) の並び(M = クエリの数)。
             image_size: 入力の (縦, 横)。
             skip_blocks: True ならブロックを通さない(two-stage の encoder の出力のマスク。queries は 1 つ)。
+            last_only: True なら、ブロックは全部の層の分を通し(画素の特徴は層ごとに順に直していくため)、材料は最後の層の分だけ
+                作る(推論では最後の層だけを使うので、結果は同じで計算が減る。exp00104 の E1)。
 
         Returns:
-            層ごとの {"spatial": (B, C, mh, mw), "query": (B, M, C), "bias": (1,)}。
+            層ごとの {"spatial": (B, C, mh, mw), "query": (B, M, C), "bias": (1,)}(last_only なら最後の層の 1 つだけ)。
         """
-        spatial = F.interpolate(p4, size=(image_size[0] // 4, image_size[1] // 4), mode="bilinear", align_corners=False)
+        size = (image_size[0] // self.stride, image_size[1] // self.stride)
+        p4 = self.reduce(p4)  # mask_dim があれば (B, C, h, w) -> (B, m, h, w)
+        spatial = p4 if p4.shape[-2:] == size else F.interpolate(p4, size=size, mode="bilinear", align_corners=False)
         out = []
         for i, q in enumerate(queries):
             if not skip_blocks:
@@ -378,6 +390,8 @@ class SegmentationHead(nn.Module):
                     spatial = torch.utils.checkpoint.checkpoint(self.blocks[i], spatial, use_reentrant=False)
                 else:
                     spatial = self.blocks[i](spatial)
+            if last_only and i < len(queries) - 1:
+                continue
             out.append({"spatial": self.spatial_proj(spatial), "query": self.query_proj(self.query_block(q)), "bias": self.bias})
         return out
 
@@ -417,10 +431,11 @@ class RFDETRSeg(nn.Module):
         groups: 学習のときのクエリの組の数 G(Group DETR)。
         dec_layers: decoder の層の数。
         pretrained: backbone に timm の事前学習の重みを読むか。
+        mask_stride: マスクを作る解像度の、入力に対する縮小の倍率(既定は公式と同じ 4。公式の mask_downsample_ratio)。
     """
 
     def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", num_queries: int = 100, groups: int = 13,
-                 dec_layers: int = 4, pretrained: bool = True):
+                 dec_layers: int = 4, pretrained: bool = True, mask_stride: int = 4):
         super().__init__()
         self.num_queries, self.groups = num_queries, groups
         self.features = Features(backbone, pretrained=pretrained)
@@ -441,7 +456,7 @@ class RFDETRSeg(nn.Module):
         nn.init.zeros_(self.bbox_embed.layers[-1].bias)
         self.enc_class_embed = nn.ModuleList(_copy(self.class_embed) for _ in range(groups))
         self.enc_bbox_embed = nn.ModuleList(_copy(self.bbox_embed) for _ in range(groups))
-        self.seg_head = SegmentationHead(dec_layers)
+        self.seg_head = SegmentationHead(dec_layers, stride=mask_stride)
 
     def _proposals(self, b: int, h: int, w: int, device) -> tuple[torch.Tensor, torch.Tensor]:
         """P4 の各画素を候補の枠にする(中心 = 画素の中心、幅・高さ = 0.05。公式の gen_encoder_output_proposals)。

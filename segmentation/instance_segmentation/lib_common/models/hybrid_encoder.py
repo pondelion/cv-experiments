@@ -52,10 +52,46 @@ class RepBlock(nn.Module):
     def __init__(self, c: int):
         super().__init__()
         self.conv3, self.conv1 = conv_bn(c, c, 3, act=False), conv_bn(c, c, 1, act=False)
+        self.fused = None  # fuse_() の後は、2 つの枝と BN をまとめた 1 つの 3×3 の畳み込み
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, c, h, w) -> (B, c, h, w)。"""
+        if self.fused is not None:
+            return F.silu(self.fused(x))
         return F.silu(self.conv3(x) + self.conv1(x))
+
+    @torch.no_grad()
+    def fuse_(self) -> None:
+        """推論用に、3×3 + BN と 1×1 + BN の 2 つの枝を 1 つの 3×3 の畳み込み(bias あり)にまとめる(RepVGG の
+        re-parameterization。計算は同じ。exp00104 の E4)。BN は推論のときの統計(running_mean・running_var)を使う。"""
+        def conv_bn_weights(seq: nn.Sequential) -> tuple[torch.Tensor, torch.Tensor]:
+            """畳み込み + BN を、1 つの畳み込みの (重み, bias) にする。"""
+            conv, bn = seq[0], seq[1]
+            scale = bn.weight / torch.sqrt(bn.running_var + bn.eps)  # (c,)
+            return conv.weight * scale[:, None, None, None], bn.bias - bn.running_mean * scale
+        w3, b3 = conv_bn_weights(self.conv3)
+        w1, b1 = conv_bn_weights(self.conv1)
+        conv = nn.Conv2d(w3.shape[1], w3.shape[0], 3, padding=1).to(w3.device, w3.dtype)
+        conv.weight.copy_(w3 + F.pad(w1, (1, 1, 1, 1)))  # 1×1 の重みを 3×3 の真ん中に置いて足す
+        conv.bias.copy_(b3 + b1)
+        self.fused = conv
+
+
+class DWBlock(nn.Module):
+    """RepBlock の代わりの、depthwise 3×3 + BN → pointwise 1×1 + BN → SiLU(MobileNet の depthwise separable な畳み込み。
+    幅はそのままで、3×3 の普通の畳み込みの計算を約 1/9 にする。exp00104 の E3)。
+
+    Args:
+        c: 入力・出力のチャンネル。
+    """
+
+    def __init__(self, c: int):
+        super().__init__()
+        self.dw, self.pw = conv_bn(c, c, 3, groups=c, act=False), conv_bn(c, c, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """(B, c, h, w) -> (B, c, h, w)。"""
+        return self.pw(self.dw(x))
 
 
 class CSPBlock(nn.Module):
@@ -65,12 +101,13 @@ class CSPBlock(nn.Module):
         cin: 入力のチャンネル。
         cout: 出力のチャンネル(途中の幅も cout)。
         n: RepBlock の数。
+        block: 中のブロック("rep": RepBlock / "dw": DWBlock)。
     """
 
-    def __init__(self, cin: int, cout: int, n: int):
+    def __init__(self, cin: int, cout: int, n: int, block: str = "rep"):
         super().__init__()
         self.split = conv_bn(cin, 2 * cout)
-        self.blocks = nn.Sequential(*[RepBlock(cout) for _ in range(n)])
+        self.blocks = nn.Sequential(*[(RepBlock if block == "rep" else DWBlock)(cout) for _ in range(n)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, cin, h, w) -> (B, cout, h, w)。"""
@@ -88,12 +125,13 @@ class FuseBlock(nn.Module):
         wide: 最初の 1×1 の出力のチャンネル(公式の c3 = 2 × D_MODEL)。
         mid: CSPBlock の幅(公式の c4 = expansion × D_MODEL / 2)。
         n: CSPBlock の中の RepBlock の数。
+        block: CSPBlock の中のブロック("rep" / "dw")。
     """
 
-    def __init__(self, cin: int, cout: int, wide: int, mid: int, n: int):
+    def __init__(self, cin: int, cout: int, wide: int, mid: int, n: int, block: str = "rep"):
         super().__init__()
         self.inp = conv_bn(cin, wide)
-        self.csp1, self.csp2 = CSPBlock(wide // 2, mid, n), CSPBlock(mid, mid, n)
+        self.csp1, self.csp2 = CSPBlock(wide // 2, mid, n, block), CSPBlock(mid, mid, n, block)
         self.out = conv_bn(wide + 2 * mid, cout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -136,13 +174,14 @@ class AIFILayer(nn.Module):
     Args:
         heads: 注意の頭の数。
         ffn: FFN の中間の次元。
+        dim: 特徴の次元(既定は D_MODEL)。
     """
 
-    def __init__(self, heads: int = 8, ffn: int = 1024):
+    def __init__(self, heads: int = 8, ffn: int = 1024, dim: int = D_MODEL):
         super().__init__()
-        self.attn = nn.MultiheadAttention(D_MODEL, heads, batch_first=True)
-        self.ffn = nn.Sequential(nn.Linear(D_MODEL, ffn), nn.SiLU(inplace=True), nn.Linear(ffn, D_MODEL))
-        self.norm1, self.norm2 = nn.LayerNorm(D_MODEL), nn.LayerNorm(D_MODEL)
+        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.ffn = nn.Sequential(nn.Linear(dim, ffn), nn.SiLU(inplace=True), nn.Linear(ffn, dim))
+        self.norm1, self.norm2 = nn.LayerNorm(dim), nn.LayerNorm(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, C, h, w) -> (B, C, h, w)。位置の埋め込みは注意の問いと鍵にだけ足す。"""
@@ -164,18 +203,21 @@ class HybridEncoder(nn.Module):
         n: CSPBlock の中の RepBlock の数(公式は round(3 × depth_mult)。L の版は 3)。
         heads: AIFI の注意の頭の数。
         ffn: AIFI の FFN の中間の次元。
+        dim: 出力の特徴の次元 C(既定は D_MODEL。公式の hidden_dim)。
+        block: 融合のブロックの中の 3×3 のブロック("rep": 公式と同じ RepVGG 型 / "dw": depthwise separable。exp00104 の E3)。
     """
 
-    def __init__(self, cins: list[int], expansion: float = 0.75, n: int = 3, heads: int = 8, ffn: int = 1024):
+    def __init__(self, cins: list[int], expansion: float = 0.75, n: int = 3, heads: int = 8, ffn: int = 1024,
+                 dim: int = D_MODEL, block: str = "rep"):
         super().__init__()
-        self.proj = nn.ModuleList(conv_bn(c, D_MODEL, act=False) for c in cins)
-        self.aifi = AIFILayer(heads, ffn)
-        mid = round(expansion * D_MODEL // 2)
-        fuse = lambda: FuseBlock(D_MODEL, D_MODEL, 2 * D_MODEL, mid, n)  # 足し合わせるので入力も C チャンネル
-        self.lateral = nn.ModuleList(conv_bn(D_MODEL, D_MODEL, act=False) for _ in range(2))  # stride 32・16 の段の横から
+        self.proj = nn.ModuleList(conv_bn(c, dim, act=False) for c in cins)
+        self.aifi = AIFILayer(heads, ffn, dim)
+        mid = round(expansion * dim // 2)
+        fuse = lambda: FuseBlock(dim, dim, 2 * dim, mid, n, block)  # 足し合わせるので入力も C チャンネル
+        self.lateral = nn.ModuleList(conv_bn(dim, dim, act=False) for _ in range(2))  # stride 32・16 の段の横から
         self.fpn = nn.ModuleList(fuse() for _ in range(2))  # stride 16・8 を作る
-        self.down = nn.ModuleList(nn.Sequential(conv_bn(D_MODEL, D_MODEL, act=False),
-                                                conv_bn(D_MODEL, D_MODEL, 3, 2, groups=D_MODEL, act=False))
+        self.down = nn.ModuleList(nn.Sequential(conv_bn(dim, dim, act=False),
+                                                conv_bn(dim, dim, 3, 2, groups=dim, act=False))
                                   for _ in range(2))  # stride 8 → 16、16 → 32
         self.pan = nn.ModuleList(fuse() for _ in range(2))  # stride 16・32 を作る
 

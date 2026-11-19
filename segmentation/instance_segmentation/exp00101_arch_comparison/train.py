@@ -9,6 +9,8 @@
         学習の設定は YOLO 系の公開の既定の値(lib_common/train.py の YOLO_RECIPE)
     gtr_seg: 自作の GTR-Seg 系(segmentation/instance_segmentation/lib_common/models/gtr_seg.py)。
         学習の設定は公式の GTR-Seg のもの、データ拡張は基本の lsj(lib_common/train.py の GTR_RECIPE)
+    maskrcnn: Mask R-CNN(torchvision の実装、backbone は timm。segmentation/instance_segmentation/lib_common/models/maskrcnn.py)。
+        学習の設定は detectron2 の new baselines のもの(lib_common/train.py の MASKRCNN_RECIPE)。exp00103 の参考の値
 学習・評価の流れは segmentation/instance_segmentation/lib_common/train.py。
 
 使い方:
@@ -17,12 +19,13 @@
     (動作確認: --max-steps 30 --eval-n 20)
 """
 import argparse
+import json
 
 import common
 
 from lib_common.datasets import set_path
-from segmentation.instance_segmentation.lib_common.train import (EOMT_RECIPE, GTR_RECIPE, PMT_RECIPE, RFDETR_RECIPE,
-                                                                 YOLO_RECIPE,
+from segmentation.instance_segmentation.lib_common.train import (EOMT_RECIPE, GTR_RECIPE, MASKRCNN_RECIPE, PMT_RECIPE,
+                                                                 RFDETR_RECIPE, YOLO_RECIPE,
                                                                  TrainConfig,
                                                                  evaluate_saved, train)
 
@@ -30,7 +33,8 @@ from segmentation.instance_segmentation.lib_common.train import (EOMT_RECIPE, GT
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--name", required=True)
-    p.add_argument("--arch", default="mask2former", choices=["mask2former", "rfdetr_seg", "yolo_seg", "gtr_seg", "eomt", "pmt"])
+    p.add_argument("--arch", default="mask2former", choices=["mask2former", "rfdetr_seg", "yolo_seg", "gtr_seg", "eomt", "pmt",
+                                                                "maskrcnn"])
     p.add_argument("--train-set", default="coco_train_cls8_2k")  # 最初の 2 本は coco_train_10pct(20 クラス)
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--eval-every", type=int, default=10)
@@ -45,9 +49,13 @@ def main() -> None:
     p.add_argument("--augmentation", default=None,
                    help="学習のデータ拡張(transforms.build_train_transforms の名前。省略すると方式の公式の設定)")
     p.add_argument("--no-multi-scale", action="store_true", help="rfdetr_seg: まとめごとの一辺の切り替えをしない(過学習の確認用)")
+    p.add_argument("--model-kwargs", default=None,
+                   help='モデルを作るときに足す引数の JSON(exp00104 の軽い構成。例: \'{"dim": 128, "mask_stride": 8}\')')
     p.add_argument("--eval-resize", choices=["pad", "square"], default=None,
                    help="評価の変換(省略すると方式の設定。比較の基本の条件は pad)")
     p.add_argument("--no-compile", action="store_true", help="torch.compile を使わない")
+    p.add_argument("--compile-backbone", action="store_true",
+                   help="モデル全体を compile しない方式(gtr_seg など)でも、形が変わらない backbone だけを torch.compile する")
     p.add_argument("--ifan", action="store_true", help="eomt: iFAN の学習の仕組みと推論の点数を足す")
     p.add_argument("--grad-accum", type=int, default=1,
                    help="1 回の更新(--batch-size 枚)を、batch-size / grad-accum 枚ずつ grad-accum 回に分けて勾配をためる")
@@ -72,7 +80,7 @@ def main() -> None:
     p.add_argument("--warmup", type=int, default=None, help="学習率を上げていく回数(省略すると方式の公式の設定)")
     a = p.parse_args()
     recipe = dict({"rfdetr_seg": RFDETR_RECIPE, "yolo_seg": YOLO_RECIPE, "gtr_seg": GTR_RECIPE,
-                   "eomt": EOMT_RECIPE, "pmt": PMT_RECIPE}.get(a.arch, {}))
+                   "eomt": EOMT_RECIPE, "pmt": PMT_RECIPE, "maskrcnn": MASKRCNN_RECIPE}.get(a.arch, {}))
     recipe["backbone"] = a.backbone or recipe.get("backbone", "resnet50.a1_in1k")
     if a.augmentation is not None:
         recipe["augmentation"] = a.augmentation
@@ -90,6 +98,8 @@ def main() -> None:
         recipe["ifan"] = True
     if a.eval_resize is not None:
         recipe["eval_resize"] = a.eval_resize
+    if a.model_kwargs:
+        recipe["model_kwargs"] = json.loads(a.model_kwargs)
     for k in ("lr", "clip", "weight_decay", "backbone_lr_mult", "pixel_decoder", "mask_pos", "optimizer", "momentum", "gtr_encoder", "gtr_mask_loss"):
         if getattr(a, k) is not None:
             recipe[k] = getattr(a, k)
@@ -97,7 +107,7 @@ def main() -> None:
                       eval_sets=a.eval_sets,
                       results_dir=str(common.RESULTS_DIR), epochs=a.epochs, eval_every=a.eval_every, eval_n=a.eval_n,
                       batch_size=a.batch_size, size=a.size, max_steps=a.max_steps,
-                      max_vram_gb=a.max_vram_gb, **recipe)
+                      max_vram_gb=a.max_vram_gb, compile_backbone=a.compile_backbone, **recipe)
     evaluate_saved(cfg) if a.eval_only else train(cfg)
 
 

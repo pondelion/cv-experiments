@@ -40,11 +40,15 @@ class GTRExport(nn.Module):
 
     Args:
         model: 評価のときの GTRSeg(eval にしたもの)。
+        mask_topk: 0 より大きいと、クラスの値の最大が上位 mask_topk 個のクエリだけを出力し、そのマスクだけを作る
+            (exp00104 の E1)。後処理(rfdetr_to_predictions)は (クエリ, クラス) の組の上位 100 個を選ぶので、その組に入るクエリは
+            クラスの値の最大の上位 100 個に必ず含まれる。mask_topk ≥ 100 なら、後処理の結果は全部のクエリのときと同じ
+            (同じ値が並ぶときの順の違いを除く)。0 なら全部のクエリ(Q 個)。
     """
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, mask_topk: int = 0):
         super().__init__()
-        self.model = model
+        self.model, self.mask_topk = model, mask_topk
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """推論する。
@@ -53,10 +57,15 @@ class GTRExport(nn.Module):
             images: 正規化した画像 (1, 3, S, S)。
 
         Returns:
-            (クラスの値 (1, Q, K), 枠 (1, Q, 4), マスクの値 (1, Q, S/4, S/4))。
+            (クラスの値 (1, Q', K), 枠 (1, Q', 4), マスクの値 (1, Q', S/4, S/4))。Q' は mask_topk(0 なら Q)。
         """
         last = self.model(images)["layers"][-1]
-        return last["logits"], last["boxes"], masks_from_parts(last["mask_parts"])
+        logits, boxes, parts = last["logits"], last["boxes"], last["mask_parts"]
+        if self.mask_topk:
+            idx = logits.max(-1).values.topk(self.mask_topk, dim=1).indices  # (1, Q')
+            pick = lambda x: torch.gather(x, 1, idx[..., None].expand(-1, -1, x.shape[-1]))
+            logits, boxes, parts = pick(logits), pick(boxes), parts | {"query": pick(parts["query"])}
+        return logits, boxes, masks_from_parts(parts)
 
 
 class YOLOExport(nn.Module):
@@ -165,11 +174,13 @@ def deform_forward_low_rank(self, query: torch.Tensor, ref: torch.Tensor, values
     return rearrange(out, "(b h) c m -> b m (h c)", b=b)
 
 
-def build(run_dir: Path) -> tuple[nn.Module, dict, list[str]]:
+def build(run_dir: Path, mask_topk: int = 0, fuse_rep: bool = False) -> tuple[nn.Module, dict, list[str]]:
     """学習の記録からモデルを作って重みを読み、書き出し用に包む。
 
     Args:
         run_dir: 学習の出力のフォルダ(config.json と best.pt がある)。
+        mask_topk: gtr_seg: 上位のこの数のクエリだけのマスクを出力する(GTRExport。0 なら全部)。
+        fuse_rep: gtr_seg: hybrid encoder の RepBlock の 2 つの枝と BN を 1 つの畳み込みにまとめる(RepBlock.fuse_。計算は同じ)。
 
     Returns:
         (包んだモデル(eval・CPU), 学習の設定, 出力の名前の並び)。
@@ -179,11 +190,17 @@ def build(run_dir: Path) -> tuple[nn.Module, dict, list[str]]:
     state = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=False)
     state = {k.replace("_orig_mod.", ""): v for k, v in state.get("model", state).items()}
     if cfg["arch"] == "gtr_seg":  # 学習の train.build_model と同じ引数(gradient checkpointing は推論では使わない)
-        model = GTRSeg(num_classes, cfg["backbone"], encoder=cfg.get("gtr_encoder", "c2f"), pretrained=False)
+        model = GTRSeg(num_classes, cfg["backbone"], encoder=cfg.get("gtr_encoder", "c2f"), pretrained=False,
+                       **cfg.get("model_kwargs", {}))
         model.load_state_dict(state, strict=True)
-        return GTRExport(model.eval()).eval(), cfg, ["logits", "boxes", "masks"]
+        model.eval()
+        if fuse_rep:
+            for m in model.modules():
+                if hasattr(m, "fuse_"):
+                    m.fuse_()
+        return GTRExport(model, mask_topk).eval(), cfg, ["logits", "boxes", "masks"]
     if cfg["arch"] == "yolo_seg":
-        model = YOLOSeg(num_classes, cfg["backbone"], pretrained=False)
+        model = YOLOSeg(num_classes, cfg["backbone"], pretrained=False, **cfg.get("model_kwargs", {}))
         model.load_state_dict(state, strict=True)
         return YOLOExport(model.eval()).eval(), cfg, ["logits", "boxes", "coef", "protos"]
     raise ValueError(f"書き出しに対応していない方式: {cfg['arch']}")
@@ -199,15 +216,25 @@ def main() -> None:
     p.add_argument("--webgpu", action="store_true",
                    help="ブラウザの WebGPU で準備が終わらない形の演算を、同じ計算の別の形に差し替えて書き出す"
                         "(注意を頭ごとの 2 次元の行列の掛け算に、GTR の点の位置の計算を 3 次元に)")
+    p.add_argument("--webgpu-patches", default="psa,mha,deform",
+                   help="--webgpu で入れる差し替え(カンマ区切り。psa: YOLO の PSA の注意、mha: nn.MultiheadAttention、deform: GTR の点の位置の計算)")
+    p.add_argument("--mask-topk", type=int, default=0,
+                   help="gtr_seg: クラスの値の最大が上位のこの数のクエリだけのマスクを出力する(100 以上なら後処理の結果は同じ。0 なら全部)")
+    p.add_argument("--fuse-rep", action="store_true",
+                   help="gtr_seg: hybrid encoder の RepBlock の枝と BN を 1 つの畳み込みにまとめてから書き出す(計算は同じ)")
     a = p.parse_args()
     run_dir = Path(a.run)
-    model, cfg, names = build(run_dir)
+    model, cfg, names = build(run_dir, a.mask_topk, a.fuse_rep)
     if a.webgpu:
         from segmentation.instance_segmentation.lib_common.models.gtr_seg import MSDeformableAttention
         from segmentation.instance_segmentation.lib_common.models.yolo_seg import PSABlock
-        PSABlock.forward = psa_forward_2d
-        nn.MultiheadAttention.forward = mha_forward_2d
-        MSDeformableAttention.forward = deform_forward_low_rank
+        patches = set(a.webgpu_patches.split(","))
+        if "psa" in patches:
+            PSABlock.forward = psa_forward_2d
+        if "mha" in patches:
+            nn.MultiheadAttention.forward = mha_forward_2d
+        if "deform" in patches:
+            MSDeformableAttention.forward = deform_forward_low_rank
     out = Path(a.out) if a.out else common.RUNS_DIR / run_dir.name / "model.onnx"
     out.parent.mkdir(parents=True, exist_ok=True)
 

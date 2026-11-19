@@ -22,6 +22,19 @@
           "info": "segmentation/instance_segmentation/exp00103_latest_methods(A)。COCO の 8 クラス・2,000 枚で学習。exp00302 で重みを INT8 にして小さくした(計算は fp32)"
         },
         {
+          "id": "gtr_light_hgv2b2_cls8_int8",
+          "title": "GTR 系の軽い構成(HGNetV2-B2、INT8)",
+          "onnx": "https://huggingface.co/tkyk1234/cv-experiments-models/resolve/main/segmentation/instance_segmentation/gtr_light_hgv2b2_cls8_int8.onnx",
+          "format": "gtr_seg",
+          "input_size": 512,
+          "mean": [0.485, 0.456, 0.406],
+          "std": [0.229, 0.224, 0.225],
+          "classes": ["person", "bicycle", "car", "cat", "dog", "bottle", "chair", "tv"],
+          "score_threshold": 0.3,
+          "crop_to_box": false,
+          "info": "segmentation/instance_segmentation/exp00105_backbone(backbone HGNetV2-B2 + exp00104 の軽い後段)。COCO の 8 クラス・2,000 枚で学習。exp00302 で重みを INT8 にして小さくした(計算は fp32)"
+        },
+        {
           "id": "yolo26seg_r50_cls8_int8",
           "title": "YOLO26-seg 系(R50、INT8)",
           "onnx": "https://huggingface.co/tkyk1234/cv-experiments-models/resolve/main/segmentation/instance_segmentation/yolo26seg_r50_cls8_int8.onnx",

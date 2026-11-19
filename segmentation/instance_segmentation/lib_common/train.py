@@ -60,8 +60,9 @@ from segmentation.instance_segmentation.lib_common.losses.mask2former_criterion 
 from segmentation.instance_segmentation.lib_common.losses.rfdetr_criterion import RFDETRCriterion
 from segmentation.instance_segmentation.lib_common.models.mask2former import Mask2Former
 from segmentation.instance_segmentation.lib_common.models.rfdetr_seg import RFDETRSeg, masks_from_parts
-from segmentation.instance_segmentation.lib_common.postprocess import (rfdetr_to_predictions, to_predictions,
-                                                                       yolo_to_predictions)
+from segmentation.instance_segmentation.lib_common.postprocess import (maskrcnn_to_predictions, rfdetr_to_predictions,
+                                                                       to_predictions, yolo_to_predictions)
+from segmentation.instance_segmentation.lib_common.models.maskrcnn import MaskRCNNLoss, MaskRCNNSeg
 from lib_common.plots import plot_per_class_ap, plot_training_curves
 from segmentation.instance_segmentation.lib_common.samples import (SAMPLE_COUNTS, render_compare, render_train_inputs,
                                                                    sample_set)
@@ -69,6 +70,8 @@ from segmentation.instance_segmentation.lib_common.transforms import (batch_scal
                                                                       eval_transforms, square_eval_transforms)
 
 WARMUP = 500
+MULTISTEP_WARMUP_FACTOR = 0.067  # schedule="multistep" の warmup の始めの倍率(detectron2 の new baselines)
+MULTISTEP_FRACS = (163889 / 184375, 177546 / 184375)  # schedule="multistep" で 1/10 にする所(全部の回数に対する割合。同上)
 LOG_EVERY = 50  # 損失などを記録する回数の間隔
 _LAST_LOG: dict = {}  # 前の記録の (回数, 時刻)。今の速さの計算に使う(train の初めに空にする)
 SAMPLE_SCORE = 0.3  # 途中の見本に描く予測のスコアの下限
@@ -98,6 +101,8 @@ class TrainConfig:
     pixel_decoder: str = "fpn"  # mask2former の pixel decoder("fpn": 簡略版 / "fpn_m2f": 公式の FPN と同じ構成 / "msdeform": 公式と同じ deformable な注意の encoder / "unet")
     mask_pos: str = "none"  # mask2former のマスクを作る画素の特徴に位置の情報を足すか("none" / "sine")
     gtr_encoder: str = "c2f"  # gtr_seg の encoder("c2f": 公式の GTR と同じ / "hybrid": RT-DETR の hybrid encoder。ECInsSeg と同じ)
+    # モデルを作るときに足す引数(gtr_seg・yolo_seg・rfdetr_seg。例: {"dim": 128, "mask_stride": 8}。exp00104 の軽い構成)。空なら今までと同じ
+    model_kwargs: dict = field(default_factory=dict)
     gtr_mask_loss: str = "points"  # gtr_seg のマスクの損失("points": 公式の GTR と同じ / "box_crop": D-FINE-seg と同じ)
     ifan: bool = False  # eomt: iFAN(マスクの質の head と、質の BCE・APMR・CLSD の損失、質を使う推論の点数)を足す
     grad_accum: int = 1  # 1 回の更新(batch_size 枚)を、batch_size / grad_accum 枚のまとめ grad_accum 回に分けて勾配をためる
@@ -105,6 +110,7 @@ class TrainConfig:
     seed: int = 0
     max_steps: int | None = None  # 動作確認用(この回数で止める)
     compile: bool = True
+    compile_backbone: bool = False  # compile が False のときでも、backbone だけを torch.compile する(入力の形が変わらない部分だけ。exp00105)
     max_vram_gb: float | None = 12.0  # この学習が使える VRAM の上限(None なら制限しない)
     augmentation: str = "lsj"  # 学習のデータ拡張(transforms.build_train_transforms の名前)
     warmup: int = WARMUP  # 学習率を上げていく回数
@@ -166,8 +172,17 @@ YOLO_RECIPE = dict(arch="yolo_seg", optimizer="sgd", lr=0.01, momentum=0.937, we
 # 学習率は flat-cosine(warmup は 2 乗で上げる min(2000 回, 3 エポック) = 375 回、Mosaic を始める 6/30 エポックまで一定、
 # 0.5 倍まで cosine で下げ、データ拡張を止める最後の 2/30 は 0.5 倍のまま。ここでは割合で 100 エポックに合わせる)。
 # データ拡張と評価の入力は、方式どうしを公平に比べるため、基本の lsj と eval_transforms にする(公式は Mosaic・IoU の切り抜き・
-# mixup など。データ拡張の差は exp00106 で見る)。公式は fp32 で学習するが、ほかの方式と同じ bf16 にする。torch.compile は使わない
+# mixup など。データ拡張の差は exp00107 で見る)。公式は fp32 で学習するが、ほかの方式と同じ bf16 にする。torch.compile は使わない
 # (denoising のクエリの数が画像ごとの物体の数で変わり、形が毎回変わるため)。
+# Mask R-CNN(古典の方式の参考の値。exp00103)の学習の設定。detectron2 の configs/new_baselines/mask_rcnn_R_50_FPN_100ep_LSJ.py
+# (backbone と head に BN を入れた Mask R-CNN を LSJ で 100 エポック。この比較と同じ条件)の値: SGD momentum 0.9(nesterov なし)、
+# 学習率 0.1(1 回の更新あたり 64 枚)を 16 枚に合わせて 0.025、weight decay 4e-5(正規化の層は 0)、warmup 500 回(0.067 倍から)を
+# 全部の回数 184,375 回に対する割合でこの学習の 12,500 回に合わせて 34 回、全部の 88.9%・96.3% で 1/10、勾配の上限なし。
+# 公式との違い: backbone は公式(ゼロから学習)と違い、ほかの方式と同じ timm の ImageNet の R50 で初期化する。bias の weight decay は
+# 0(公式は 4e-5。YOLO 系と同じ分け方を使うため)。torch.compile は使わない(候補の数などで形が毎回変わるため)。
+MASKRCNN_RECIPE = dict(arch="maskrcnn", optimizer="sgd", lr=0.025, momentum=0.9, weight_decay=4e-5, schedule="multistep",
+                       warmup=34, clip=float("inf"), augmentation="lsj", eval_resize="pad", compile=False)
+
 GTR_RECIPE = dict(arch="gtr_seg", lr=5e-4, backbone_lr_mult=0.03, weight_decay=1e-4, clip=0.1, schedule="flatcosine",
                   warmup=375, lrf=0.5, flat_frac=6 / 30, tail_frac=2 / 30, ema_decay=0.9999, ema_tau=1000.0,
                   augmentation="lsj", eval_resize="pad", compile=False)
@@ -207,15 +222,18 @@ def build_model(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
         model = Mask2Former(num_classes, cfg.backbone, cfg.num_queries, pixel_decoder=cfg.pixel_decoder,
                             mask_pos=cfg.mask_pos)
     elif cfg.arch == "rfdetr_seg":
-        model = RFDETRSeg(num_classes, cfg.backbone, cfg.num_queries, cfg.groups)
+        model = RFDETRSeg(num_classes, cfg.backbone, cfg.num_queries, cfg.groups, **cfg.model_kwargs)
     elif cfg.arch == "yolo_seg":
-        model = YOLOSeg(num_classes, cfg.backbone)
+        model = YOLOSeg(num_classes, cfg.backbone, **cfg.model_kwargs)
     elif cfg.arch == "gtr_seg":
-        model = GTRSeg(num_classes, cfg.backbone, encoder=cfg.gtr_encoder, grad_checkpoint=cfg.grad_checkpoint)
+        model = GTRSeg(num_classes, cfg.backbone, encoder=cfg.gtr_encoder, grad_checkpoint=cfg.grad_checkpoint,
+                       **cfg.model_kwargs)
     elif cfg.arch == "eomt":
         model = EoMT(num_classes, cfg.backbone, cfg.num_queries, img_size=cfg.size, quality_head=cfg.ifan)
     elif cfg.arch == "pmt":
         model = PMT(num_classes, cfg.backbone, cfg.num_queries, img_size=cfg.size)
+    elif cfg.arch == "maskrcnn":
+        model = MaskRCNNSeg(num_classes, cfg.backbone, size=cfg.size)
     else:
         raise ValueError(f"知らないモデルの方式: {cfg.arch}")
     return model.cuda().to(memory_format=torch.channels_last)
@@ -237,6 +255,8 @@ def build_criterion(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
         return YOLOCriterion(num_classes).cuda()
     if cfg.arch == "gtr_seg":
         return GTRCriterion(groups=3, mask_loss=cfg.gtr_mask_loss, checkpoint=cfg.grad_checkpoint).cuda()
+    if cfg.arch == "maskrcnn":  # 損失はモデルの中で計算する(models/maskrcnn.py)。内訳を足すだけ
+        return MaskRCNNLoss()
     if cfg.ifan:
         return IFANCriterion(num_classes).cuda()
     return Mask2FormerCriterion(num_classes).cuda()
@@ -261,8 +281,8 @@ def build_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.Opt
         groups = [{"params": [p for n, p in named if p.ndim > 1], "weight_decay": cfg.weight_decay},
                   {"params": [p for n, p in named if p.ndim == 1 and not n.endswith(".bias")], "weight_decay": 0.0},
                   {"params": [p for n, p in named if p.ndim == 1 and n.endswith(".bias")], "weight_decay": 0.0}]
-        if cfg.optimizer == "sgd":
-            return torch.optim.SGD(groups, lr=cfg.lr, momentum=cfg.momentum, nesterov=True)
+        if cfg.optimizer == "sgd":  # maskrcnn は detectron2 と同じ nesterov なし
+            return torch.optim.SGD(groups, lr=cfg.lr, momentum=cfg.momentum, nesterov=cfg.arch != "maskrcnn")
         if cfg.optimizer == "musgd":  # exp00102 の Y1: YOLO26 の論文の MuSGD(値は ultralytics の公式の実装と同じ)
             # 2 次元・4 次元の重みは Muon + SGD(weight decay あり)、BN の重み・bias は SGD だけ(weight decay なし)。
             # クラスの枝と意味のマスクの枝(公式の cv3・one2one_cv3・semseg)は学習率を 3 倍にする
@@ -376,7 +396,8 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
         total_steps: 学習の全部の回数。
         warmup: 学習率を上げていく回数(0 なら最初から元の学習率)。
         schedule: "poly" / "constant" / "linear"(1 から lrf へ直線で下げる)/ "flatcosine"(一定の後 cosine で lrf へ)/
-            "cosine"(warmup の後 cosine で 0 へ)。
+            "cosine"(warmup の後 cosine で 0 へ)/ "multistep"(0.067 倍からの warmup の後、MULTISTEP_FRACS の所で 1/10。
+            detectron2)。
         lrf: schedule="linear" の最後の倍率 / "flatcosine" の最小の倍率。
         flat_frac, tail_frac: schedule="flatcosine" の一定の所までの割合と、最後の最小のままの割合。
         backbone_warmup: 0 より大きいと 2 段の warmup(公式の EoMT の TwoStageWarmupPolySchedule。schedule は poly)。
@@ -409,6 +430,10 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             return lrf + (1 - lrf) * 0.5 * (1 + math.cos(math.pi * (step - flat) / (total_steps - flat - tail)))
         if schedule == "linear":
             return up * ((1 - step / total_steps) * (1 - lrf) + lrf)
+        if schedule == "multistep":  # detectron2 の WarmupParamScheduler + MultiStepParamScheduler(new baselines の値)
+            if step < warmup:  # 0.067 倍から直線で 1 へ
+                return MULTISTEP_WARMUP_FACTOR + (1 - MULTISTEP_WARMUP_FACTOR) * step / warmup
+            return 0.1 ** sum(step >= round(f * total_steps) for f in MULTISTEP_FRACS)
         if schedule == "cosine":  # 公式の PMT の WarmupCosineSchedule(warmup は直線で 0 から、その後 cosine で 0 へ)
             if step < warmup:
                 return step / warmup
@@ -482,6 +507,8 @@ def train_one_epoch(forward, model: torch.nn.Module, criterion: torch.nn.Module,
         with torch.autocast("cuda", dtype=torch.bfloat16):
             if cfg.arch == "gtr_seg":  # denoising のクエリを作るために正解(枠・クラス)も渡す
                 outs = forward(images, targets_from_masks(targets, tuple(targets[0]["masks"].shape[-2:])))
+            elif cfg.arch == "maskrcnn":  # 損失をモデルの中で計算するので正解も渡す
+                outs = forward(images, targets)
             else:
                 outs = forward(images)
         loss, parts = criterion(outs, targets)
@@ -548,6 +575,8 @@ def predict(model: torch.nn.Module, set_name: str, cfg: TrainConfig, workers: in
             preds += rfdetr_to_predictions(last["logits"], last["boxes"], masks, batch["meta"],
                                            pad_size=cfg.size if cfg.eval_resize == "pad" else None,
                                            crop_to_box=cfg.arch == "gtr_seg" and cfg.gtr_mask_loss == "box_crop")
+        elif cfg.arch == "maskrcnn":
+            preds += maskrcnn_to_predictions(out, batch["meta"], cfg.size)
         elif cfg.arch == "yolo_seg":
             o = out["o2o"]
             preds += yolo_to_predictions(o["logits"], decode_boxes(o["ltrb"], out["anchors"], out["strides"]), o["coef"],
@@ -668,6 +697,8 @@ def train(cfg: TrainConfig) -> dict:
     optimizer = build_optimizer(model, cfg)
     ema = build_ema(model, cfg)
     eval_model = ema.module if ema is not None else model  # 評価する重み(EMA を使うときは EMA だけ。公式の RF-DETR と同じ)
+    if cfg.compile_backbone and not cfg.compile:  # その場で compile するので、保存する重みの名前は変わらない(EMA の複製の後に行う)
+        getattr(model, "backbone", None).compile()
     def make_loader(augmentation: str) -> tuple[InstanceDataset, DataLoader]:
         """学習のデータと読み込みを作る(Mosaic のときは MosaicInstanceDataset)。
 

@@ -44,7 +44,7 @@ class WorkerSession {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
-      if (msg.type === "result") p.resolve(msg.outputs);
+      if (msg.type === "result") { this.lastTiming = msg.timing; p.resolve(msg.outputs); } // 最後の推論の時間の内訳
       else p.reject(new Error(msg.message));
     };
   }
@@ -77,6 +77,11 @@ function loadInWorker(model, ep, optLevel) {
   const log = new URLSearchParams(location.search).get("log");
   if (log) url.searchParams.set("log", log);
   if (new URLSearchParams(location.search).has("nosubgroups")) url.searchParams.set("nosubgroups", "1");
+  if (new URLSearchParams(location.search).has("keepqdq")) url.searchParams.set("keepqdq", "1");
+  const gpu = new URLSearchParams(location.search).get("gpu");
+  if (gpu) url.searchParams.set("gpu", gpu);
+  const threads = new URLSearchParams(location.search).get("threads");
+  if (threads) url.searchParams.set("threads", threads);
   const worker = new Worker(url, { type: "module" });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -85,7 +90,7 @@ function loadInWorker(model, ep, optLevel) {
     }, LOAD_TIMEOUT_MS);
     worker.onmessage = ({ data: msg }) => {
       clearTimeout(timer);
-      if (msg.type === "loaded") resolve({ worker, threads: msg.threads });
+      if (msg.type === "loaded") resolve({ worker, threads: msg.threads, adapter: msg.adapter });
       else { worker.terminate(); reject(new Error(`${ep} でモデルを準備できない: ${msg.message}`)); }
     };
     worker.onerror = (e) => { clearTimeout(timer); worker.terminate(); reject(new Error(`${ep} の Worker のエラー: ${e.message}`)); };
@@ -107,8 +112,9 @@ export async function createSession(model, backend = "auto", optLevel = "all", o
   for (const ep of order) {
     try {
       onStatus(`${ep} でモデルを準備中…(初回は時間がかかります。最大 ${LOAD_TIMEOUT_MS / 1000} 秒)`);
-      const { worker, threads } = await loadInWorker(model, ep, optLevel);
-      return { session: new WorkerSession(worker), backend: threads ? `${ep}・${threads} スレッド` : ep };
+      const { worker, threads, adapter } = await loadInWorker(model, ep, optLevel);
+      return { session: new WorkerSession(worker),
+               backend: threads ? `${ep}・${threads} スレッド` : adapter ? `${ep}(${adapter})` : ep };
     } catch (e) {
       console.warn(e);
       errors.push(e.message);
