@@ -16,8 +16,26 @@ import matplotlib.pyplot as plt  # noqa: E402
 LOSS_KEYS_SKIP = {"step", "epoch", "lr", "img_per_s", "recent_img_per_s", "time", "elapsed_s"}
 
 
+def series_style(i: int, n: int) -> dict:
+    """i 番目の系列の色・線の種類・印(系列が多くても見分けられるように)。
+
+    10 本までは matplotlib の既定の色。それより多いときは tab20 の 20 色に、線の種類(実線・破線・点線)と印を組み合わせる。
+
+    Args:
+        i: 系列の番号。
+        n: 系列の数。
+
+    Returns:
+        ax.plot・ax.bar に渡す引数の dict(color・linestyle・marker)。
+    """
+    if n <= 10:
+        return {"color": f"C{i}", "linestyle": "-", "marker": "o"}
+    return {"color": plt.get_cmap("tab20")(i % 20), "linestyle": ["-", "--", ":"][(i // 20) % 3],
+            "marker": "osD^v<>p*h"[i % 10]}
+
+
 def plot_eval_curves(series: dict[str, list[tuple[float, float]]], out_path: Path, title: str,
-                     xlabel: str = "epoch", ylabel: str = "mask AP (%)") -> None:
+                     xlabel: str = "epoch", ylabel: str = "mask AP (%)", legend_outside: bool = False) -> None:
     """学習中の評価の推移を、学習ごとに 1 本の折れ線で重ねて描く(方式・条件どうしの学習の進み方の比較)。
 
     Args:
@@ -25,21 +43,26 @@ def plot_eval_curves(series: dict[str, list[tuple[float, float]]], out_path: Pat
         out_path: 保存先の PNG のパス。
         title: 図の題。
         xlabel, ylabel: 軸の名前。
+        legend_outside: 凡例を図の右の外に出す(系列が多いとき)。
     """
-    fig, ax = plt.subplots(figsize=(6, 3.6))
-    for name, pts in series.items():
-        ax.plot([p[0] for p in pts], [p[1] for p in pts], marker="o", label=name)
+    fig, ax = plt.subplots(figsize=(9, 4.5) if legend_outside else (6, 3.6))
+    for i, (name, pts) in enumerate(series.items()):
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], label=name, **({"markersize": 4} if legend_outside else {}),
+                **series_style(i, len(series)))
     ax.set(title=title, xlabel=xlabel, ylabel=ylabel)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
+    if legend_outside:
+        ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0)
+    else:
+        ax.legend(fontsize=8)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=80)
+    fig.savefig(out_path, dpi=80, bbox_inches="tight" if legend_outside else None)  # 外の凡例も含めて保存する
     plt.close(fig)
 
 
 def plot_per_class_ap(per_class: dict[str, dict[str, float]], train_images: dict[str, int], out_path: Path,
-                      title: str) -> None:
+                      title: str, legend_outside: bool = False) -> None:
     """クラスごとの mask AP(評価のセットごとの棒)と、学習データでそのクラスを含む画像の数(折れ線)を 1 枚に描く。
 
     クラスは学習の画像の数の多い順に並べる(学習の量と精度の関係を見るため)。
@@ -49,25 +72,31 @@ def plot_per_class_ap(per_class: dict[str, dict[str, float]], train_images: dict
         train_images: {クラス名: 学習データでそのクラスを含む画像の数}。
         out_path: 保存先の PNG のパス。
         title: 図の題。
+        legend_outside: 凡例を図の右の外に出す(棒の系列が多いとき)。
     """
     import numpy as np
     names = sorted(train_images, key=lambda n: -train_images[n])
-    fig, ax = plt.subplots(figsize=(12, 3.6))
+    fig, ax = plt.subplots(figsize=(16, 4.5) if legend_outside else (12, 3.6))
     width = 0.8 / len(per_class)
     for i, (s, ap) in enumerate(per_class.items()):
         ax.bar(np.arange(len(names)) + (i - (len(per_class) - 1) / 2) * width, [100 * ap.get(n, float("nan")) for n in names],
-               width, label=f"mask AP: {s}")
+               width, label=s if legend_outside else f"mask AP: {s}", color=series_style(i, len(per_class))["color"])
     ax.set(ylabel="mask AP (%)", title=title)
     ax.set_xticks(np.arange(len(names)), names, rotation=45, ha="right", fontsize=8)
-    ax.legend(fontsize=8, loc="upper left")
     ax2 = ax.twinx()
     ax2.plot(np.arange(len(names)), [train_images[n] for n in names], color="gray", marker=".", label="train images")
     ax2.set(ylabel="train images (log)", yscale="log")
-    ax2.legend(fontsize=8, loc="upper right")
+    if legend_outside:  # 棒と折れ線の凡例を 1 つにまとめて、右の外(右の軸の目盛りより外)に出す
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper left", bbox_to_anchor=(1.06, 1.0), borderaxespad=0)
+    else:
+        ax.legend(fontsize=8, loc="upper left")
+        ax2.legend(fontsize=8, loc="upper right")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=80)
+    fig.savefig(out_path, dpi=80, bbox_inches="tight" if legend_outside else None)  # 外の凡例も含めて保存する
     plt.close(fig)
 
 

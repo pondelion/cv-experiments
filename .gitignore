@@ -11,3 +11,6 @@ tmp/*
 **/results/samples/DIAG_*/
 **/results/samples/*_inverted_boxes/
 **/results/samples/index_local.json
+# exp00104・exp00105 は構成・backbone の数が多いので、見本の画像は全部ローカルだけに残す
+segmentation/instance_segmentation/exp00104_light_configs/results/samples/
+segmentation/instance_segmentation/exp00105_backbone/results/samples/

@@ -98,4 +98,36 @@ coco_val_test_cls8 の先頭の画像を入れ、PyTorch fp32 と ONNX Runtime �
 - ONNX にしても、mask AP・box AP は PyTorch と 0.1 ポイント以内で同じ。TF32 のあり・なしでも変わらない
 - PQ は最大 0.6 ポイントほど違う。PQ は dev で選ぶ閾値で決まる値なので、その選ばれた閾値が違ったのかもしれないが、確かめていない
 - GTR 系の TF32 なしの結果の JSON は、保存のフォルダを作っていなかった不具合で残っていない(値はログ `runs/gtr_hybrid_ort_cuda_fp32_tf32_0.log` から)
-- 速さ(遅延)はまだ測っていない
+### 5. 軽い構成(exp00105 の HGNetV2-B2 + 軽い後段)の書き出し・精度・CPU の速さ
+
+exp00105 の `gtr_light_hgv2b2_cls8_2k_ep100`(backbone HGNetV2-B2、後段は exp00104 の G1 + E2(64) + E3)を `--webgpu` で書き出した
+(fp32 で 2.9MB + 46MB)。マスクの出力は (1, 300, 128, 128) で、R50 の候補と同じ 1/4 の解像度。
+
+出力の一致(coco_val_test_cls8 の先頭の画像): ONNX Runtime CPU は一致(クラスの値 3e-5・枠 3e-7・マスク 1e-3)。ONNX Runtime CUDA は
+TF32 なしでもずれる(クラスの値 2.5・マスク 107)。R50 の候補では CUDA でも一致していたので、この構成の何かの演算が CUDA で違う計算に
+なっていると見ているが、どの演算かは調べていない。そのため精度は ONNX Runtime CPU で測った。
+
+精度(値は %。ONNX Runtime CPU。重みだけ INT8 は exp00302 の `quantize_weights.py`、`session.disable_quant_qdq = 1` を入れて動かした):
+
+| 形式 | test mask AP | voc mask AP | test box AP | voc box AP | test PQ | voc PQ |
+|---|---|---|---|---|---|---|
+| PyTorch fp32(学習のときの評価) | 31.78 | 38.82 | 34.83 | 51.15 | 42.81 | 50.13 |
+| ONNX Runtime CPU fp32 | 31.81 | 38.86 | 34.82 | 51.25 | 43.18 | 49.33 |
+| ONNX Runtime CPU 重みだけ INT8 | 32.03 | 38.89 | 35.11 | 51.24 | 43.20 | 49.96 |
+
+- ONNX にしても、重みだけ INT8 にしても、mask AP・box AP は下がらない(差は +0.3 ポイント以内)
+
+CPU の 1 コマの時間(`bench_cpu.py`。batch 1・入力 512・モデルだけ。3 回を捨てて 15 回の中央値。ms。Intel Core Ultra 7 265K。
+比べるため、ブラウザのデモで使っている R50 の候補も同じ回に測った):
+
+| 候補 | スレッド | PyTorch fp32 | ONNX Runtime fp32 | ONNX Runtime 重みだけ INT8 |
+|---|---|---|---|---|
+| 自作の GTR 系 + hybrid encoder(R50) | 1 | 806 | 631 | 629 |
+| | 4 | 245 | 190 | 192 |
+| 軽い構成(HGNetV2-B2) | 1 | 263(−67%) | 195(−69%) | 195(−69%) |
+| | 4 | 93(−62%) | 69(−64%) | 70(−64%) |
+
+括弧の中は R50 の候補の同じ形式・同じスレッドの数に対する割合。
+
+- ONNX Runtime は PyTorch より 1 スレッド −26%、4 スレッド −25%(軽い構成)。重みだけ INT8 は fp32 と同じ時間
+- 結果: `results/cpu_latency_gtr_light_hgv2b2.json`・`results/cpu_latency_gtr_hybrid_r50.json`

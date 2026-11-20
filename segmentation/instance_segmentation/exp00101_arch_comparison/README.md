@@ -23,7 +23,7 @@
 | Mask2Former 系 | 2022(CVPR 2022) | クエリ方式の基本形。最初の基準(以前の検証で良かったため) |
 | RF-DETR-Seg 系 | 2026(ICLR 2026。公式のコードは Apache-2.0) | 比べる相手の公式と同じ方式。自作で公式と結果がそろうことを確かめてから、部品を 1 つずつ変えて超えていく(本筋) |
 | YOLO26-seg 系 | 2026(arXiv 2606.03748、Ultralytics) | クエリ方式ではない、NMS なしの密な予測の CNN の代表。少ないデータ・短い学習に強い可能性と、速さの軸での比較。自作は論文だけから作る(公式のコードは AGPL)。比べる相手として、公式のコードの backbone だけを差し替えたものも学習する(公式のコードは `vendor/` に置き、GitHub には上げない) |
-| GTR 系 | 2026-09(arXiv 2609.26590。公式のコードは MIT) | RF-DETR-Seg より高い mask AP と短い遅延を報告(論文の値。RF-DETR の値には SAM2 の疑似マスクで学習したという注記がある)。論文の新しさの中心は backbone(ゲート付き線形注意の ViT、DINOv3 からの蒸留)だが、ここではほかの方式と同じく R50 にそろえ、backbone より後(3 段の encoder、D-FINE 系の decoder、損失、学習の設定)を比べる。backbone そのものの比較は exp00105 |
+| GTR 系 | 2026-09(arXiv 2609.26590。公式のコードは MIT) | RF-DETR-Seg より高い mask AP と短い遅延を報告(論文の値。RF-DETR の値には SAM2 の疑似マスクで学習したという注記がある)。論文の新しさの中心は backbone(ゲート付き線形注意の ViT、DINOv3 からの蒸留)だが、ここではほかの方式と同じく R50 にそろえ、backbone より後(3 段の encoder、D-FINE 系の decoder、損失、学習の設定)を比べる。backbone そのものの比較は exp00105。**注記**: この exp 以降の「GTR 系」は GTR の論文の中心(backbone)を含まず、実態は D-FINE 系の検出 + マスクの head(トップの README の「結果のまとめ」の注記) |
 
 候補から外したもの: ProtoSeg(YOLACT 系)・SOLOv2・SparseInst・RTMDet-Ins(2020〜2022 年。古く、報告されている精度も低い)、
 Mask DINO(2023。DN 学習・two-stage などの部品は、自作の RF-DETR-Seg 系の部品の比較で扱う)。ViT の backbone が前提の EoMT と、

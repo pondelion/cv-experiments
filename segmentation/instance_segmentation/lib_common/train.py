@@ -303,8 +303,10 @@ def build_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.Opt
         named = list(model.named_parameters())
         nd = lambda n: any(s in n for s in ("norm", "bn", "bias"))
         lr_bb = cfg.lr * cfg.backbone_lr_mult
-        bb = [(n, p) for n, p in named if n.startswith("backbone.")]
-        other = [(n, p) for n, p in named if not n.startswith("backbone.")]
+        # ViT の adapter(backbones/vit_adapter.py)の STA と融合の層は学習済みの重みがないので、backbone の倍率をかけない(DEIMv2 と同じ)
+        is_bb = lambda n: n.startswith("backbone.") and not n.startswith(("backbone.sta.", "backbone.fuse."))
+        bb = [(n, p) for n, p in named if is_bb(n)]
+        other = [(n, p) for n, p in named if not is_bb(n)]
         groups = [{"params": [p for n, p in bb if not nd(n)], "lr": lr_bb, "weight_decay": cfg.weight_decay},
                   {"params": [p for n, p in bb if nd(n)], "lr": lr_bb, "weight_decay": 0.0},
                   {"params": [p for n, p in other if not nd(n)], "lr": cfg.lr, "weight_decay": cfg.weight_decay},

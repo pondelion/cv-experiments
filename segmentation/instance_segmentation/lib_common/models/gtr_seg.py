@@ -5,6 +5,11 @@ det/segmentation_head.py、configs/seg)を参考に、仕組みと設定の値�
 1 つずつ写してはいない。同じ計算になることはテストで確かめる)。backbone は公式のゲート付き線形注意の ViT ではなく、
 比較の条件に合わせて timm の CNN(R50)にする。
 
+名前の注記: GTR の論文の中心は backbone(ゲート付き線形注意の ViT)で、このモデルはそれを含まない。使っているのは backbone より
+後ろ(D-FINE・DEIM 系の decoder と損失、GTR の論文の組み合わせと設定)だけで、encoder="hybrid"(exp00103 の A 以降の既定)では
+encoder も RT-DETR の hybrid encoder になる。実態は「RT-DETR / D-FINE 系のインスタンスセグメンテーション」に近い。名前は
+これまでの結果との対応のためそのまま使う。
+
 構成:
     backbone(timm、stride 8・16・32 の段)
     → encoder(GTREncoder): 出力の stride 8・16・32 のそれぞれで、backbone の全部の段をその stride に拡大縮小してつなげ、
@@ -27,13 +32,13 @@ det/segmentation_head.py、configs/seg)を参考に、仕組みと設定の値�
 import copy
 import math
 
-import timm
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 from torchvision.ops import box_convert
 
+from segmentation.instance_segmentation.lib_common.backbones import create_feature_backbone
 from segmentation.instance_segmentation.lib_common.models.hybrid_encoder import HybridEncoder
 from segmentation.instance_segmentation.lib_common.models.rfdetr_seg import C2f, ChannelLayerNorm, SegmentationHead
 
@@ -417,9 +422,8 @@ class GTRSeg(nn.Module):
         super().__init__()
         self.num_classes, self.num_queries, self.groups, self.num_dn = num_classes, num_queries, groups, num_dn
         # stride 8・16・32 の段を選ぶ(段の番号は backbone によって違う。R50 では (2, 3, 4)。exp00105)
-        reductions = timm.create_model(backbone, pretrained=False, features_only=True).feature_info.reduction()
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True,
-                                          out_indices=tuple(reductions.index(s) for s in STRIDES))
+        # 入力の大きさに位置の情報が固定された backbone(EfficientFormerV2)は、入力 512 に合わせて作り、位置のバイアスを補間して読む
+        self.backbone = create_feature_backbone(backbone, pretrained)
         cins = self.backbone.feature_info.channels()
         # 入力はデータの変換で ImageNet の平均・標準偏差で正規化してある。事前学習の正規化が違う backbone(平均・標準偏差 0.5 など)は、
         # backbone の入口でその正規化に直す(同じなら何もしない。学習の重みには入れない)

@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | RF-DETR-Seg | ICLR 2026 | DINOv2 + DETR 系の decoder + 軽いマスクの head | 40.3(N)〜49.9(2XL) | 自作済み(test 27.3) |
 | YOLO26-seg | arXiv 2606.03748 | NMS なしの密な予測の CNN | YOLO11 から最大 +3.7 | 自作済み(test 30.7) |
-| GTR | arXiv 2609.26590 | ゲート付きの線形注意の ViT + D-FINE 系の decoder | 各大きさで最も高いと報告 | 自作済み(test 30.3。backbone は R50) |
+| GTR | arXiv 2609.26590 | ゲート付きの線形注意の ViT + D-FINE 系の decoder | 各大きさで最も高いと報告 | 自作済み(test 30.3。backbone は R50)。**論文の中心の backbone は含まない**(A で encoder も RT-DETR の hybrid encoder にしたので、実態は RT-DETR / D-FINE 系。トップの README の注記) |
 | ECInsSeg(EdgeCrafter) | arXiv 2603.18739 | 蒸留した小さい ViT(ECViT)+ RT-DETR の hybrid encoder(最も粗い段だけ自己注意(AIFI)+ 段をまたいで混ぜる畳み込み(CCFF))+ DETR 系の decoder(300 クエリ・4 層、D-FINE の損失)+ stride 8 の特徴とクエリの内積のマスクの head | S 43.0・M 45.2・L 47.1・X 48.4 | 論文の中心は backbone の蒸留(蒸留で初期化すると S で 38.0 → 42.8)。backbone より後は自作の GTR 系とほぼ同じで、違いは encoder(hybrid encoder) |
 | EoMT | CVPR 2025(arXiv 2503.19108) | Mask2Former の pixel decoder・transformer decoder を取り除き、ViT の最後の数層(ViT-S・B は 3 層)にクエリ(200 個)を入れて ViT の自己注意だけで処理する。マスクは ViT の出力を 2×2 の転置畳み込みで stride 4 まで上げた特徴とクエリの内積。学習中だけマスクで絞った注意を使い、確率を 1 → 0 に下げていく(mask annealing) | ViT-L(DINOv2): 入力 640 で 45.2、1280 で 48.8(ViT-Adapter + Mask2Former は 47.6・51.4) | 未実装。ViT が前提。論文は、小さい ViT(ViT-S で panoptic の PQ が 5.8 低い)と弱い事前学習(ImageNet-1K で 6.1 低い)で大きく下がると報告 |
 | iFAN | arXiv 2608.03216 | EoMT のような「decoder のないマスクの transformer」の学習だけに足す 2 つの仕組み(マスクの質でクエリを順位づける損失、途中の層の予測を最後の層に蒸留)。推論は変わらない | COCO・ADE20K・Cityscapes の平均で +1.3 | EoMT の上に足す |

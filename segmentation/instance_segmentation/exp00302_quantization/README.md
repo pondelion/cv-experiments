@@ -58,6 +58,7 @@ WASM で −1〜2% とネイティブより小さい。exp00304 の README の�
 |---|---|---|---|
 | 自作の GTR 系 + hybrid encoder | 146MB(グラフ 2.5MB + 重み 143MB) | 37.8MB | 42.0MB |
 | 自作の YOLO26-seg 系 | 180MB(グラフ 1.2MB + 重み 179MB) | 45.7MB | 46.2MB |
+| 軽い構成(exp00105 の HGNetV2-B2) | 48.8MB(グラフ 2.9MB + 重み 46MB) | 作っていない | 16.6MB |
 
 INT8 はどれも 1 つのファイルで、GitHub の 1 ファイルの上限(100MB)に収まる。静的な量子化は、調整の画像(synthetic・real)によらず
 大きさは同じ。
@@ -99,5 +100,8 @@ Gather・GatherElements を量子化すると壊れる。GTR 系はこれで、e
 | | 重みだけ INT8 | 30.73 | 35.43 | 33.61 | 44.90 | 42.18 | 46.50 |
 
 - 重みだけの INT8 にしても、test の mask AP は変わらない(+0.1・+0.0 ポイント)。voc は 0.3〜0.5 ポイント下がる
+- 軽い構成(exp00105 の HGNetV2-B2)の重みだけ INT8 は、ONNX Runtime の CUDA で fp32 の出力がずれるため(exp00301 の README の 5)、
+  ONNX Runtime CPU(`session.disable_quant_qdq = 1`)で測った: fp32 → INT8 で test mask AP 31.81 → 32.03、voc 38.86 → 38.89。
+  下がらない(値は exp00301 の README の 5)
 - 静的な量子化の精度(と、合成画像・実画像の調整の比べ)は測っていない。サイトで重みだけの INT8 を使うことにしたので、評価を取りやめた。
   GTR 系の静的な量子化は、既定の設定では壊れる(上の「GTR 系の INT8 が壊れた原因」)

@@ -74,7 +74,7 @@ def evaluate(set_name: str, predictions: list[dict], boundary: bool = True, pixe
     result["segm"], result["per_class_segm_AP"] = _evaluate_one(gt, predictions, "segm")
     result["bbox"], _ = _evaluate_one(gt, predictions, "bbox")
     if boundary:
-        result["boundary"], _ = _evaluate_one(gt, predictions, "boundary")
+        result["boundary"], result["per_class_boundary_AP"] = _evaluate_one(gt, predictions, "boundary")
     if pixel:
         pm = PixelMetrics(gt, predictions)
         t = pm.best_threshold() if score_threshold is None else score_threshold
