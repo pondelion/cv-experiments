@@ -50,6 +50,9 @@ def main() -> None:
     p.add_argument("--test-sets", nargs="+", default=None,
                    help="学習の途中に全部の画像で評価して記録する test の役のセット(最良の重みの選択には使わない)")
     p.add_argument("--test-every", type=int, default=10, help="--test-sets の評価の間隔(エポック。--eval-every の倍数)")
+    p.add_argument("--video-dev-set", default=None,
+                   help="MinVIS の照合をかけて動画の AP を測る dev の動画のセット(あれば最良の重みは dev の動画の AP で選ぶ)")
+    p.add_argument("--video-test-set", default=None, help="同じく test の役の動画のセット(--test-every ごと。記録だけ)")
     p.add_argument("--schedule", default=None, help="学習率の変化(train.build_scheduler の名前。constant なら warmup の後は一定)")
     p.add_argument("--eval-only", action="store_true", help="学習せず、runs/{名前}/ の重み(best.pt、なければ last.pt)で評価し直す")
     p.add_argument("--augmentation", default=None,
@@ -96,6 +99,8 @@ def main() -> None:
         recipe["schedule"] = a.schedule
     if a.test_sets:
         recipe["test_sets"], recipe["test_every"] = a.test_sets, a.test_every
+    if a.video_dev_set:
+        recipe["video_dev_set"], recipe["video_test_set"] = a.video_dev_set, a.video_test_set
     if a.no_multi_scale:
         recipe["multi_scale"] = False
     if a.no_compile:

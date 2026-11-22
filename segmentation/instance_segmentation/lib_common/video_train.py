@@ -1,8 +1,8 @@
 """動画インスタンスセグメンテーションの学習と評価のループ(方式によらず共通。exp005xx)。
 
 モデルに求めること:
-    forward(clips (B, T, 3, S, S)) → (層ごとの {"logits": (B, Q, K+1), "masks": (B, Q, T·h, w)} の並び, 状態)
-        (区間の T 枚のマスクを縦につなげた形。この形なら画像の Mask2FormerCriterion がそのまま区間の損失になる。models/videomt.py)
+    forward(clips (B, T, 3, S, S)) → (層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, h, w)}(フレームごと)の並び, 状態)
+        (損失は losses/videomt_criterion.py の VideoConsistentCriterion。公式の videomt_online と同じ割り当てとフレームごとの損失)
     predict_video(frames (T, 3, S, S)) → (フレームごとのクラスの値 (T, Q, K+1), マスクの値 (Q, T, h, w))
     backbone(学習率の層ごとの減衰と 2 段の warmup の対象)を `vit` という名前で持つ(timm の ViT)
 
@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 
 from lib_common import REPO_ROOT
 from segmentation.instance_segmentation.lib_common.evaluate import save_metrics
-from segmentation.instance_segmentation.lib_common.losses.mask2former_criterion import Mask2FormerCriterion
+from segmentation.instance_segmentation.lib_common.losses.videomt_criterion import VideoConsistentCriterion
 from segmentation.instance_segmentation.lib_common.train import build_scheduler
 from segmentation.instance_segmentation.lib_common.video_data import (VideoClipDataset, VideoEvalDataset, collate_clips,
                                                                        load_video_set)
@@ -67,7 +67,10 @@ class VideoTrainConfig:
     clip: float = 0.01  # 勾配の大きさの上限(公式と同じ)
     num_queries: int = 200
     num_blocks: int = 3
-    top_k: int = 30  # 推論で動画ごとに残す (クエリ, クラス) の組の数
+    norm_queries: bool = True  # 補助の予測と次のフレームへ渡すクエリに LayerNorm をかける(公式の VIPSeg の DINOv3 の設定)
+    # 推論で動画ごとに残す (クエリ, クラス) の組の数。公式の MAX_NUM = 20 は YouTube-VIS(物体が少ない)の値で、VIPSeg の 8 クラスは
+    # 1 本に最大 69 物体(val)あり 20 では出し切れないため、AP の最大の検出の数と同じ 100 にする
+    top_k: int = 100
     workers: int = 6
     seed: int = 0
     max_vram_gb: float | None = 15.0
@@ -78,7 +81,8 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
     """方式に合わせてモデルを作る。"""
     if cfg.arch == "videomt":
         from segmentation.instance_segmentation.lib_common.models.videomt import VidEoMT
-        return VidEoMT(num_classes, cfg.backbone, cfg.num_queries, cfg.num_blocks, cfg.size, init_weights=cfg.init_weights)
+        return VidEoMT(num_classes, cfg.backbone, cfg.num_queries, cfg.num_blocks, cfg.size, init_weights=cfg.init_weights,
+                       norm_queries=cfg.norm_queries)
     raise ValueError(f"知らない方式: {cfg.arch}")
 
 
@@ -162,7 +166,7 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     model = build_video_model(cfg, num_classes).cuda()
     if cfg.init_model:  # 前の学習のモデル全体の重みから続ける
         model.load_state_dict(torch.load(cfg.init_model, map_location="cuda"))
-    criterion = Mask2FormerCriterion(num_classes).cuda()
+    criterion = VideoConsistentCriterion(num_classes).cuda()
     optimizer = build_video_optimizer(model, cfg)
     micro = cfg.batch_size // cfg.grad_accum
     steps_per_epoch = len(ds) // micro // cfg.grad_accum
@@ -177,8 +181,8 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     while step < total:
         ds.set_epoch(epoch)
         for i, batch in enumerate(DataLoader(ds, **loader_kw)):
-            targets = [{"labels": t["labels"].cuda(non_blocking=True), "masks": t["masks"].cuda(non_blocking=True).flatten(1, 2)}
-                       for t in batch["targets"]]  # 正解のマスク (N, T, S, S) → (N, T·S, S)(予測と同じく縦につなげる)
+            targets = [{"labels": t["labels"].cuda(non_blocking=True), "masks": t["masks"].cuda(non_blocking=True)}
+                       for t in batch["targets"]]  # 正解のマスクは (N, T, S, S) のまま(損失の中でフレームごとに分ける)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 outs, _ = model(batch["images"].cuda(non_blocking=True))
             loss, parts = criterion(outs, targets)

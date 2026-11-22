@@ -74,12 +74,12 @@ def dice_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def match(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, tgt_masks: torch.Tensor,
-          tgt_image: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """画像のまとめ(B 枚)の割り当て。
+def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, tgt_masks: torch.Tensor,
+               tgt_image: torch.Tensor):
+    """割り当ての費用(画像ごとのクエリ × 全部の正解の物体)。
 
     画像ごとに点の位置を 1 組選び、その画像のクエリと正解の物体を同じ点で比べる(公式と同じ)。速さのため、全部の画像の費用を
-    まとめて (B, Q, T) で計算し、CPU へは 1 回だけ移す(ほかの画像の正解との費用も計算されるが、その部分は使わない)。
+    まとめて (B, Q, T) で計算し、CPU へは 1 回だけ移す(ほかの画像の正解との費用も計算されるが、使う側はその部分を使わない)。
 
     Args:
         logits: クラスの値 (B(画像の数), Q(クエリの数), K+1(クラスの数 + 物体なし))。
@@ -89,11 +89,9 @@ def match(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, t
         tgt_image: 正解の物体がどの画像のものか (T,)。
 
     Returns:
-        画像ごとの (クエリの番号 (その画像の正解の数,), 画像の中での正解の番号 (同じ形,))。
+        費用 (B, Q, T) の numpy の配列。
     """
     b, q = logits.shape[:2]
-    if len(tgt_labels) == 0:
-        return [(torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long))] * b
     coords = torch.rand(b, N_POINTS, 2, device=masks.device)  # (B, P, 2) 画像ごとの点の位置
     pm = point_sample(rearrange(masks, "b q h w -> (b q) h w"),
                       repeat(coords, "b p xy -> (b q) p xy", q=q))  # (B × Q, P) 各クエリを自分の画像の点で
@@ -106,7 +104,21 @@ def match(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, t
     p = pm.sigmoid()
     inter = torch.einsum("bqp,tp->bqt", p, tm)  # (B, Q, T) 予測の確率と正解の重なり
     cost_dice = 1 - (2 * inter + 1) / (rearrange(p.sum(-1), "b q -> b q 1") + tm.sum(-1) + 1)  # (B, Q, T)
-    cost = (W_CLASS * cost_class + W_MASK * cost_mask + W_DICE * cost_dice).cpu().numpy()  # (B, Q, T)
+    return (W_CLASS * cost_class + W_MASK * cost_mask + W_DICE * cost_dice).cpu().numpy()  # (B, Q, T)
+
+
+@torch.no_grad()
+def match(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, tgt_masks: torch.Tensor,
+          tgt_image: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """画像のまとめ(B 枚)の割り当て(引数は match_cost と同じ)。
+
+    Returns:
+        画像ごとの (クエリの番号 (その画像の正解の数,), 画像の中での正解の番号 (同じ形,))。
+    """
+    b = logits.shape[0]
+    if len(tgt_labels) == 0:
+        return [(torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long))] * b
+    cost = match_cost(logits, masks, tgt_labels, tgt_masks, tgt_image)  # (B, Q, T)
     owner = tgt_image.cpu().numpy()
     out = []
     for i in range(b):
@@ -130,7 +142,8 @@ class Mask2FormerCriterion(nn.Module):
         self.register_buffer("class_weight", weight)
         self.num_classes = num_classes
 
-    def _one(self, out: dict, labels: torch.Tensor, tmasks: torch.Tensor, owner: torch.Tensor, starts: list[int]) -> dict:
+    def _one(self, out: dict, labels: torch.Tensor, tmasks: torch.Tensor, owner: torch.Tensor, starts: list[int],
+             indices: list | None = None) -> dict:
         """1 つの予測(1 つの層の出力)の損失。
 
         Args:
@@ -139,6 +152,8 @@ class Mask2FormerCriterion(nn.Module):
             tmasks: 同じ順の正解のマスク (T, H, W) の float。
             owner: 正解の物体がどの画像のものか (T,)。
             starts: 画像ごとの、つなげた正解の中での先頭の番号(長さ B)。
+            indices: 画像ごとの割り当て [(クエリの番号, 画像の中での正解の番号)](None なら、この予測でハンガリアン法の割り当てをする。
+                動画の VidEoMT の損失のように、割り当てを別の規則で決めるときに渡す)。
 
         Returns:
             {"class": クラスの損失, "mask": マスクの BCE, "dice": マスクの Dice の損失}(どれも 0 次元)。
@@ -148,7 +163,9 @@ class Mask2FormerCriterion(nn.Module):
         tgt_classes = torch.full((b, q), self.num_classes, dtype=torch.long, device=logits.device)  # (B, Q) 既定は「物体なし」
         src_masks, tgt_idx = [], []
         self.last_indices = []  # 画像ごとの (クエリの番号, 全体の中の正解の番号)。損失を足すサブクラス(iFAN)が使う
-        for i, (qi, ti) in enumerate(match(logits, masks, labels, tmasks, owner)):
+        if indices is None:
+            indices = match(logits, masks, labels, tmasks, owner)
+        for i, (qi, ti) in enumerate(indices):
             ti = ti.to(logits.device) + starts[i]  # 全体の中の番号に
             self.last_indices.append((qi.to(logits.device), ti))
             tgt_classes[i, qi] = labels[ti]

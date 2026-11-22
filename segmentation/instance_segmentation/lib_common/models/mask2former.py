@@ -512,4 +512,5 @@ class Mask2Former(nn.Module):
             q = layer(q, qpos, mems[lvl], poss[lvl], attn)
             logits, masks, attn = self._predict(q, mask_feat, sizes[(i + 1) % 3])
             outs.append({"logits": logits, "masks": masks})
+        outs[-1]["embeds"] = self.decoder_norm(q)  # 最後の層のクエリの埋め込み (B, Q, C)(MinVIS のフレーム間の照合に使う)
         return outs

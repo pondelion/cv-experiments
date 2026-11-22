@@ -151,15 +151,17 @@ def _normalize(frames: np.ndarray) -> torch.Tensor:
 
 
 def sample_clip(length: int, clip_len: int, frame_range: int, rng: random.Random) -> list[int]:
-    """動画から学習の区間のフレームの番号を選ぶ(DVIS・VidEoMT の公式と同じ考え方)。
+    """動画から学習の区間のフレームの番号を選ぶ(VidEoMT の公式の dataset_mapper の select_frames と同じ規則)。
 
-    基準のフレームを 1 つ選び、その前後 frame_range × clip_len の範囲から clip_len 枚を選んで時刻の順に並べる。
-    動画が clip_len より短いときは、同じフレームを重ねて使う。
+    - frame_range × 2 + 1 == clip_len(公式の VidEoMT の設定 5 枚・2): 連続した clip_len 枚(始まりは無作為)
+    - それ以外: 基準のフレームを 1 つ無作為に選び、その前後 frame_range 枚以内(基準を除く)から clip_len − 1 枚を
+      重複を許して選び、基準と合わせて時刻の順に並べる
+    動画が clip_len より短いときは、全部のフレームに、無作為に選んだフレームを重ねて足す。
 
     Args:
         length: 動画のフレームの数。
         clip_len: 区間のフレームの数 T。
-        frame_range: 基準のフレームから離れてよい距離の、clip_len あたりの倍率(公式の SAMPLING_FRAME_RANGE)。
+        frame_range: 基準のフレームから離れてよいフレームの数(公式の SAMPLING_FRAME_RANGE)。
         rng: 乱数。
 
     Returns:
@@ -167,13 +169,16 @@ def sample_clip(length: int, clip_len: int, frame_range: int, rng: random.Random
     """
     if length <= clip_len:
         return sorted(rng.choices(range(length), k=clip_len - length) + list(range(length)))
+    if frame_range * 2 + 1 == clip_len:
+        start = rng.randrange(length - clip_len + 1)
+        return list(range(start, start + clip_len))
     ref = rng.randrange(length)
-    lo, hi = max(0, ref - frame_range * clip_len), min(length, ref + frame_range * clip_len + 1)  # hi - lo > clip_len になる
-    return sorted(rng.sample(range(lo, hi), clip_len))
+    near = [i for i in range(max(0, ref - frame_range), min(length, ref + frame_range + 1)) if i != ref]
+    return sorted(rng.choices(near, k=clip_len - 1) + [ref])
 
 
 class VideoClipDataset(Dataset):
-    """学習の区間を返す(1 つの要素 = 1 本の動画から選んだ T 枚の連続に近いフレーム)。
+    """学習の区間を返す(1 つの要素 = 1 本の動画から選んだ T 枚のフレーム。公式の VidEoMT の設定では連続した T 枚)。
 
     物体のマスクは、フレームごとに「物体の番号の画像」(背景 0、物体 k は k)にまとめて画像と同じ変換をかけ、変換の後に物体ごとの
     マスクに戻す(同じフレームで物体どうしが重なる正解は、後の物体が上書きする。VIPSeg はパノプティックなので重ならない)。

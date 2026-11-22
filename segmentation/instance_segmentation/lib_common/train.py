@@ -89,6 +89,11 @@ class TrainConfig:
     eval_n: int = 500  # 途中の評価に使う枚数(最初の評価のセットの先頭)
     test_sets: list = field(default_factory=list)  # 学習の途中に全部の画像で評価して記録する test の役のセット(選択には使わない)
     test_every: int = 10  # test_sets の評価の間隔(エポック。eval_every の倍数にする)
+    # 動画の評価(exp00502 の MinVIS): 画像のモデルに MinVIS のフレーム間の照合をかけて、動画のモデルと同じ動画の AP・画像 AP を測る。
+    # video_dev_set があれば、途中の評価ごとに dev の動画で測り、最良の重みは dev の動画の AP で選ぶ。video_test_set は test_every ごと
+    video_dev_set: str | None = None
+    video_test_set: str | None = None
+    video_top_k: int = 100  # 動画ごとに残す (クエリ, クラス) の組の数(動画のモデルと同じ)
     size: int = 512
     batch_size: int = 16
     workers: int = 8
@@ -658,6 +663,27 @@ def evaluate_quick(model: torch.nn.Module, cfg: TrainConfig, quick_set: str, epo
     return rec
 
 
+def evaluate_video(model: torch.nn.Module, cfg: TrainConfig, set_name: str, epoch: int, log) -> dict:
+    """画像のモデルに MinVIS の照合をかけ、動画のセットで動画の AP と画像 AP を測って記録する(動画のモデルと同じ評価)。
+
+    Returns:
+        video_train.evaluate_video_set の結果(AP・image_AP など)+ {"set", "epoch"}。
+    """
+    from types import SimpleNamespace
+    from segmentation.instance_segmentation.lib_common.video_infer import MinVIS
+    from segmentation.instance_segmentation.lib_common.video_train import evaluate_video_set
+    torch.cuda.empty_cache()
+    # まとめて処理するフレームの数は学習の micro-batch と同じ(学習で入る大きさなので、推論も GPU のメモリの上限に収まる)
+    tracker = MinVIS(model, chunk=max(cfg.batch_size // cfg.grad_accum, 1))
+    m = evaluate_video_set(tracker, set_name, SimpleNamespace(size=cfg.size, top_k=cfg.video_top_k, workers=cfg.workers))
+    torch.cuda.empty_cache()
+    rec = {"set": set_name, "epoch": epoch, **m, "time": datetime.now().isoformat(timespec="seconds")}
+    log.write(json.dumps({"video_eval": rec}) + "\n"), log.flush()
+    print(f"[video eval] epoch {epoch} {set_name}: AP {m['AP']:.4f} AP50 {m['AP50']:.4f} AP75 {m['AP75']:.4f} "
+          f"image_AP {m['image_AP']:.4f} s_per_video {m['s_per_video']:.2f}", flush=True)
+    return rec
+
+
 def evaluate_test(model: torch.nn.Module, cfg: TrainConfig, epoch: int, log) -> dict:
     """学習の途中に、test の役のセット(cfg.test_sets)の全部の画像で mask・box の AP を測って記録する(重みの選択には使わない)。
 
@@ -771,10 +797,17 @@ def train(cfg: TrainConfig) -> dict:
             log.write(json.dumps({"epoch_end": epoch, "step": step, **losses, **timestamp(t0)}) + "\n"), log.flush()
             if step >= total or epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
                 history.append(evaluate_quick(eval_model, cfg, quick, epoch, step, log))
-                if cfg.test_sets and (epoch % cfg.test_every == 0 or step >= total or epoch == cfg.epochs):
+                is_test = epoch % cfg.test_every == 0 or step >= total or epoch == cfg.epochs
+                if cfg.test_sets and is_test:
                     history[-1]["test"] = evaluate_test(eval_model, cfg, epoch, log)  # 記録だけ(最良の重みの選択には使わない)
+                if cfg.video_dev_set:
+                    history[-1]["video"] = evaluate_video(eval_model, cfg, cfg.video_dev_set, epoch, log)
+                    if cfg.video_test_set and is_test:  # 記録だけ
+                        history[-1]["video_test"] = evaluate_video(eval_model, cfg, cfg.video_test_set, epoch, log)
                 torch.save(eval_model.state_dict(), out_dir / "last.pt")
-                if history[-1]["segm"]["AP"] >= max(h["segm"]["AP"] for h in history):  # 途中の評価の mask AP が最良の重み
+                # 最良の重み: 動画の評価があれば dev の動画の AP(動画のモデルと同じ選び方)、なければ途中の評価の mask AP
+                score = (lambda h: h["video"]["AP"]) if cfg.video_dev_set else (lambda h: h["segm"]["AP"])
+                if score(history[-1]) >= max(score(h) for h in history):
                     torch.save(eval_model.state_dict(), out_dir / "best.pt")
                     best_epoch = epoch
                 plot_training_curves(out_dir / "train_log.jsonl", curves, cfg.name)
@@ -789,6 +822,9 @@ def train(cfg: TrainConfig) -> dict:
     result = {"name": cfg.name, "config": config, "history": history, "best_epoch": best_epoch,
               "train_img_per_s": img_per_s, "eval": evaluate_final(eval_model, cfg),
               "train_class_images": class_image_counts(cfg.train_json)}
+    if cfg.video_test_set:  # 最良の重みでの動画の評価(MinVIS)
+        with open(out_dir / "train_log.jsonl", "a") as log:
+            result["video_eval"] = evaluate_video(eval_model, cfg, cfg.video_test_set, best_epoch, log)
     save_metrics(res_dir / f"{cfg.name}.json", result)
     plot_per_class_ap({s: m["per_class_segm_AP"] for s, m in result["eval"].items() if "per_class_segm_AP" in m},
                       result["train_class_images"], res_dir / "curves" / f"{cfg.name}_per_class.png", cfg.name)

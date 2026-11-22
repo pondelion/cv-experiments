@@ -16,9 +16,8 @@
     特徴との内積をマスクにする(EoMT と同じ)。学習では、クエリを入れた各層の前でも予測を出す(補助の損失)。
     公式と同じく、EoMT の学習中の注意のマスク(mask annealing)は使わない。
 
-出力(学習): 層ごとの {"logits": (B, Q, K+1)(フレームで平均したクラスの値), "masks": (B, Q, T·h, w)(T 枚のフレームのマスクを
-縦につなげたもの)} の並び。この形なら、画像の自作の Mask2Former の損失(Mask2FormerCriterion)が、そのまま区間の全フレームを
-まとめた 1 回の対応付け(公式の VideoHungarianMatcher と同じ考え方)と、区間の全フレームのマスクの損失になる。
+出力(学習): 層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, 4h, 4w)}(フレームごとの予測)の並び。損失は
+`losses/videomt_criterion.py`(公式の videomt_online と同じ、物体が最初に写ったフレームでの割り当てと、フレームごとの損失)。
 
 形の記号: B = 区間(動画)の数、T = フレームの数、Q = クエリの数、P = ViT の先頭のトークン(クラスのトークンなど)の数、
 h・w = パッチの縦・横の数(マスクは 4h・4w)、N = h × w、C = ViT の次元、K = クラスの数、S = 入力の一辺。
@@ -44,11 +43,15 @@ class VidEoMT(nn.Module):
         img_size: 入力の一辺 S(位置の埋め込みをこの大きさで作る)。
         pretrained: ViT の学習済みの重みを読むか。
         init_weights: 自己教師ありの学習(exp00106 の `lib_common/ssl/`)で保存した ViT の重み。あれば pretrained の代わりに読む。
+        norm_queries: 補助の予測と次のフレームへ渡すクエリに ViT の最後の LayerNorm をかけるか(公式の NORM_QUERIES。
+            既定の False は、この設定を入れる前の学習と同じ動き)。
     """
 
     def __init__(self, num_classes: int, backbone: str = "deit3_small_patch16_224.fb_in1k", num_queries: int = 200,
-                 num_blocks: int = 3, img_size: int = 512, pretrained: bool = True, init_weights: str | None = None):
+                 num_blocks: int = 3, img_size: int = 512, pretrained: bool = True, init_weights: str | None = None,
+                 norm_queries: bool = False):
         super().__init__()
+        self.norm_queries = norm_queries
         self.vit = timm.create_model(backbone, pretrained=pretrained and not init_weights, num_classes=0, img_size=img_size)
         if init_weights:
             from lib_common.ssl.load import load_ssl_vit
@@ -125,12 +128,15 @@ class VidEoMT(nn.Module):
             q = self.query_updater(prev) + q  # 前のフレームのクエリを足す(公式と同じ)
         x = torch.cat([q, tokens], dim=1)  # (B, Q + P + N, C)
         preds, rope = [], self._rope(hw)
+        # norm_queries(公式の NORM_QUERIES。VIPSeg の DINOv3 の設定は True): 補助の予測と次のフレームへ渡すクエリに、
+        # ViT の最後の LayerNorm をかける(False なら LayerNorm の前の値を使う)
+        norm = self.vit.norm if self.norm_queries else (lambda y: y)
         for block in self.vit.blocks[len(self.vit.blocks) - self.num_blocks:]:
             if self.training:
-                preds.append(self._predict(x, hw))  # 補助の損失のための、層の前の予測
+                preds.append(self._predict(norm(x), hw))  # 補助の損失のための、層の前の予測
             x = block(x, rope=rope) if rope is not None else block(x)
         preds.append(self._predict(self.vit.norm(x), hw))
-        return preds, x[:, : self.num_queries]  # 次のフレームへは、最後の層の出力(LayerNorm の前)のクエリを渡す(公式と同じ)
+        return preds, norm(x)[:, : self.num_queries]  # 次のフレームへは、最後の層の出力のクエリを渡す(公式と同じ)
 
     def forward(self, clips: torch.Tensor, prev: torch.Tensor | None = None) -> tuple[list[dict], torch.Tensor]:
         """区間を時刻の順に処理する。
@@ -140,7 +146,7 @@ class VidEoMT(nn.Module):
             prev: 前の区間の最後のフレームから渡すクエリ (B, Q, C)(動画の最初は None。推論で動画を区間に分けて流すとき)。
 
         Returns:
-            (層ごとの {"logits": (B, Q, K+1)(フレームで平均), "masks": (B, Q, T·4h, 4w)} の並び, 最後のフレームのクエリ (B, Q, C))。
+            (層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, 4h, 4w)}(フレームごと)の並び, 最後のフレームのクエリ (B, Q, C))。
         """
         b, t = clips.shape[:2]
         tokens, hw = self.frame_tokens(rearrange(clips, "b t c h w -> (b t) c h w"))  # 最初の L1 層はフレームをまとめて処理
@@ -151,9 +157,9 @@ class VidEoMT(nn.Module):
             per_frame.append(preds)
         outs = []
         for layer in range(len(per_frame[0])):
-            logits = torch.stack([f[layer][0] for f in per_frame], dim=1).mean(1)  # (B, T, Q, K+1) -> (B, Q, K+1)
+            logits = torch.stack([f[layer][0] for f in per_frame], dim=1)  # (B, T, Q, K+1)
             masks = torch.stack([f[layer][1] for f in per_frame], dim=2)  # (B, Q, T, 4h, 4w)
-            outs.append({"logits": logits, "masks": rearrange(masks, "b q t h w -> b q (t h) w")})
+            outs.append({"logits": logits, "masks": masks})
         return outs, prev
 
     @torch.no_grad()
