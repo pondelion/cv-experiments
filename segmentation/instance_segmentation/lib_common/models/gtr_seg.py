@@ -572,7 +572,8 @@ class GTRSeg(nn.Module):
             hidden.append(tgt)  # マスクの head は層ごとにブロックを 1 つずつ通すので、推論でも全部の層を使う
             if self.training or i == len(self.layers) - 1:
                 logits = self.lqe[i](self.score_head[i](tgt), corners)
-                layers.append({"logits": logits, "boxes": boxes, "corners": corners, "refs": ref_init})
+                # hidden: その層の出力のクエリ (B, M, C)(動画の方式(MinVIS の照合・DVIS の追跡の部)の入力に使う)
+                layers.append({"logits": logits, "boxes": boxes, "corners": corners, "refs": ref_init, "hidden": tgt})
             # 参照の枠は層ごとに直すが、位置の埋め込みは最初の枠のまま(公式の GTR と同じ)
             corners_prev, ref, out_detach = corners, boxes.detach(), tgt.detach()
         parts = self.seg_head.parts(feats[0], hidden, image_size, last_only=not self.training)  # 推論は最後の層の分だけ

@@ -153,7 +153,8 @@ def _normalize(frames: np.ndarray) -> torch.Tensor:
 def sample_clip(length: int, clip_len: int, frame_range: int, rng: random.Random) -> list[int]:
     """動画から学習の区間のフレームの番号を選ぶ(VidEoMT の公式の dataset_mapper の select_frames と同じ規則)。
 
-    - frame_range × 2 + 1 == clip_len(公式の VidEoMT の設定 5 枚・2): 連続した clip_len 枚(始まりは無作為)
+    - frame_range × 2 + 1 == clip_len(公式の VidEoMT の設定 5 枚・2)、または frame_range < 0(SAM 2 の 8 枚): 連続した clip_len 枚
+      (始まりは無作為)
     - それ以外: 基準のフレームを 1 つ無作為に選び、その前後 frame_range 枚以内(基準を除く)から clip_len − 1 枚を
       重複を許して選び、基準と合わせて時刻の順に並べる
     動画が clip_len より短いときは、全部のフレームに、無作為に選んだフレームを重ねて足す。
@@ -169,7 +170,7 @@ def sample_clip(length: int, clip_len: int, frame_range: int, rng: random.Random
     """
     if length <= clip_len:
         return sorted(rng.choices(range(length), k=clip_len - length) + list(range(length)))
-    if frame_range * 2 + 1 == clip_len:
+    if frame_range * 2 + 1 == clip_len or frame_range < 0:  # frame_range < 0: 連続した clip_len 枚(SAM 2 の RandomUniformSampler)
         start = rng.randrange(length - clip_len + 1)
         return list(range(start, start + clip_len))
     ref = rng.randrange(length)
@@ -215,7 +216,12 @@ class VideoClipDataset(Dataset):
         """Returns: {"images": (T, 3, S, S), "labels": (N,), "masks": (N, T, S, S) の bool, "video_id"}。"""
         rng = random.Random((self.seed, self.epoch, i).__hash__())
         v = self.videos[i]
-        frames = sample_clip(v["length"], self.clip_len, self.frame_range, rng)
+        if getattr(self, "deva_max_jump", None):  # DEVA の学習: 公式の VOSDataset のフレームの選び方(deva/training.py)
+            from segmentation.instance_segmentation.lib_common.models.video.deva.training import sample_frames
+            frames = sample_frames(v["length"], self.deva_max_jump, np.random.default_rng(abs(hash((self.seed, self.epoch, i)))),
+                                   self.clip_len)
+        else:
+            frames = sample_clip(v["length"], self.clip_len, self.frame_range, rng)
         imgs = np.stack([np.array(Image.open(DATASETS_DIR / v["file_names"][f]).convert("RGB")) for f in frames])  # (T, H, W, 3)
         anns = self.anns[v["id"]]
         ids = np.zeros((len(frames), v["height"], v["width"]), np.uint16)  # (T, H, W) の物体の番号の画像

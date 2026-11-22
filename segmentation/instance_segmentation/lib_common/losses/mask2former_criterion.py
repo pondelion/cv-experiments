@@ -75,8 +75,11 @@ def dice_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, tgt_masks: torch.Tensor,
-               tgt_image: torch.Tensor):
+               tgt_image: torch.Tensor, activation: str = "softmax"):
     """割り当ての費用(画像ごとのクエリ × 全部の正解の物体)。
+
+    activation "sigmoid": クラスの値が (B, Q, K) の sigmoid の方式(GTR 系の画像のモデルを segmenter に使う DVIS の学習の前半の割り当て)。
+    クラスの費用を −sigmoid の確率にする(softmax の方式の −softmax の確率と同じ形。私の判断)。
 
     画像ごとに点の位置を 1 組選び、その画像のクエリと正解の物体を同じ点で比べる(公式と同じ)。速さのため、全部の画像の費用を
     まとめて (B, Q, T) で計算し、CPU へは 1 回だけ移す(ほかの画像の正解との費用も計算されるが、使う側はその部分を使わない)。
@@ -97,14 +100,16 @@ def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tens
                       repeat(coords, "b p xy -> (b q) p xy", q=q))  # (B × Q, P) 各クエリを自分の画像の点で
     pm = rearrange(pm, "(b q) p -> b q p", b=b)  # (B × Q, P) -> (B, Q, P)
     tm = point_sample(tgt_masks, coords[tgt_image])  # (T, P) 各物体を自分の画像の点で
-    cost_class = -logits.float().softmax(-1)[:, :, tgt_labels]  # (B, Q, K+1) -> (B, Q, T)
+    probs = logits.float().sigmoid() if activation == "sigmoid" else logits.float().softmax(-1)
+    cost_class = -probs[:, :, tgt_labels]  # (B, Q, K+1)(sigmoid は (B, Q, K))-> (B, Q, T)
     # BCE の費用: 予測の値 x、正解 t で、点の平均の BCE = mean(softplus(x)) − mean(x t)
     cross = torch.einsum("bqp,tp->bqt", pm, tm)  # (B, Q, P) × (T, P) -> (B, Q, T) 点ごとの積の和
     cost_mask = rearrange(F.softplus(pm).mean(-1), "b q -> b q 1") - cross / N_POINTS  # (B, Q, T)
     p = pm.sigmoid()
     inter = torch.einsum("bqp,tp->bqt", p, tm)  # (B, Q, T) 予測の確率と正解の重なり
     cost_dice = 1 - (2 * inter + 1) / (rearrange(p.sum(-1), "b q -> b q 1") + tm.sum(-1) + 1)  # (B, Q, T)
-    return (W_CLASS * cost_class + W_MASK * cost_mask + W_DICE * cost_dice).cpu().numpy()  # (B, Q, T)
+    # (B, Q, T)。autocast の中で呼ばれる(DVIS-DAQ の追跡の部の中の割り当て)と einsum が bf16 になるので、float にしてから numpy に
+    return (W_CLASS * cost_class + W_MASK * cost_mask + W_DICE * cost_dice).float().cpu().numpy()
 
 
 @torch.no_grad()

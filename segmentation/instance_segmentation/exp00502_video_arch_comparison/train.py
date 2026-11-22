@@ -25,7 +25,7 @@ def main() -> None:
         else:
             to_bool = lambda s: s.lower() in ("1", "true", "yes")  # --norm-queries false などの真偽の項目
             typ = {int: int, float: float, str: str, bool: to_bool}.get(type(f.default), str)
-            none_typ = str if f.name in ("init_weights", "init_model", "test_set") else float  # 既定が None の項目: パス・セット名は文字列、ほかは数
+            none_typ = str if f.name in ("init_weights", "init_model", "test_set", "segmenter") else float  # 既定が None の項目: パス・セット名は文字列、ほかは数
             p.add_argument("--" + f.name.replace("_", "-"), type=typ if f.default is not None else none_typ, default=None)
     a = p.parse_args()
     over = {k: v for k, v in vars(a).items() if v is not None and k != "name"}

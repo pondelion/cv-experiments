@@ -19,7 +19,8 @@ from pycocotools import mask as mask_util
 
 @torch.no_grad()
 def video_predictions(logits: torch.Tensor, masks: torch.Tensor, video_id: int, cat_ids: list[int], size: int,
-                      valid_size: tuple[int, int], orig_size: tuple[int, int], top_k: int = 30) -> list[dict]:
+                      valid_size: tuple[int, int], orig_size: tuple[int, int], top_k: int = 30,
+                      activation: str = "softmax") -> list[dict]:
     """1 本の動画の予測を、評価の予測の形にする。
 
     Args:
@@ -35,7 +36,11 @@ def video_predictions(logits: torch.Tensor, masks: torch.Tensor, video_id: int, 
     Returns:
         [{"video_id", "category_id", "score", "segmentations": [フレームごとの RLE または None], "query"}]。
     """
-    prob = logits.float().mean(0).softmax(-1)[:, :-1]  # (T, Q, K+1) -> (Q, K+1) -> (Q, K)
+    # (T, Q, K+1) はフレームで平均してから softmax。(Q, K+1)(DVIS-DAQ: ID ごとに記録したフレームで平均したもの)はそのまま softmax。
+    # activation "sigmoid"(GTR 系の画像のモデルを使う方式。クラスの値は (·, Q, K))は、同じく平均してから sigmoid(私の判断: 公式の
+    # MinVIS は softmax のモデルなので、sigmoid のモデルでの同じ順の扱い)
+    video_logits = logits.float() if logits.dim() == 2 else logits.float().mean(0)
+    prob = video_logits.sigmoid() if activation == "sigmoid" else video_logits.softmax(-1)[:, :-1]  # (Q, K)
     q, k = prob.shape
     scores, idx = prob.flatten().topk(min(top_k, q * k))
     preds = []
@@ -57,49 +62,6 @@ def video_predictions(logits: torch.Tensor, masks: torch.Tensor, video_id: int, 
     return preds
 
 
-class MinVIS(torch.nn.Module):
-    """MinVIS(Huang ら NeurIPS 2022)の推論: 画像の Mask2Former をフレームごとにかけ、隣のフレームのクエリを照合して ID をつなぐ。
-
-    MOT(動画全体での物体の ID の管理)の形: 推論の照合。クエリの枠 = ID。フレーム t のクエリを、1 つ前のフレームの(並べ替えた後の)
-    クエリと、最後の decoder 層のクエリの埋め込み(LayerNorm の後)の cos の近さでハンガリアン法で 1 対 1 に組にし、前のフレームの
-    並びにそろえる(公式の NVlabs/MinVIS の match_from_embds・post_processing と同じ規則)。全部のクエリを毎フレーム組にするので、
-    隠れている物体の枠は「物体なし」のクエリとつながり、再び写ったときに埋め込みが近ければ同じ枠に戻る(戻す規則があるわけではない)。
-    新しい物体は、前のフレームで「物体なし」だった枠に入る。区別できる物体はクエリの数まで。学習は画像の学習だけ(動画の正解は使わない)。
-
-    Args:
-        model: 画像の Mask2Former(forward の最後の要素に "embeds" (B, Q, C) を持つ)。
-        chunk: まとめて処理するフレームの数(GPU のメモリとの兼ね合い)。
-    """
-
-    def __init__(self, model: torch.nn.Module, chunk: int = 8):
-        super().__init__()
-        self.model, self.chunk = model, chunk
-
-    @torch.no_grad()
-    def predict_video(self, frames: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """VidEoMT.predict_video と同じ形で返す。
-
-        Args:
-            frames: (T, 3, S, S)。
-
-        Returns:
-            (並べ替えた後のフレームごとのクラスの値 (T, Q, K+1), マスクの値 (Q, T, S/4, S/4))。
-        """
-        from scipy.optimize import linear_sum_assignment
-        logits, masks, embeds = [], [], []
-        for s in range(0, len(frames), self.chunk):
-            out = self.model(frames[s: s + self.chunk])[-1]
-            logits.append(out["logits"]); masks.append(out["masks"]); embeds.append(out["embeds"])
-        logits, masks, embeds = torch.cat(logits), torch.cat(masks), torch.cat(embeds)  # (T, Q, K+1), (T, Q, h, w), (T, Q, C)
-        emb = F.normalize(embeds.float(), dim=-1)
-        order = [torch.arange(emb.shape[1], device=emb.device)]
-        for t in range(1, len(emb)):
-            prev = emb[t - 1][order[-1]]  # 1 つ前のフレームの、並べ替えた後の埋め込み (Q, C)
-            cost = (1 - emb[t] @ prev.T).float().cpu().numpy()  # (今のクエリ, 前の枠) の 1 − cos(autocast の中でも float にする)
-            # (前の枠, 今のクエリ) の費用で割り当てる。正方形なので、返り値の 1 つ目は前の枠の 0〜Q−1 の順、2 つ目がその枠に入る今のクエリ
-            _, cur = linear_sum_assignment(cost.T)
-            order.append(torch.as_tensor(cur, device=emb.device))
-        idx = torch.stack(order)  # (T, Q) フレーム t の枠 q に入る今のクエリの番号
-        logits = torch.gather(logits, 1, idx[..., None].expand_as(logits))
-        masks = masks[torch.arange(len(idx), device=idx.device)[:, None], idx]  # (T, Q, h, w)
-        return logits, masks.transpose(0, 1)  # (T, Q, K+1), (Q, T, h, w)
+# 一時的な中継: 学習中の MinVIS(exp00502、2026-11-22 に開始)が、途中の評価でこの場所から MinVIS を読み込むため。
+# 本体は models/video/minvis.py。その学習が終わったらこの行を消す
+from segmentation.instance_segmentation.lib_common.models.video.minvis import MinVIS  # noqa: E402,F401

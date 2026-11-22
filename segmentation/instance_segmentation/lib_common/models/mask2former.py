@@ -427,11 +427,16 @@ class Mask2Former(nn.Module):
             "unet"(UnetPixelDecoder。UNet の decoder)/ "unet_gn"・"unet_gn_wide"(UNet の確かめ用。上の decoders の注)。
         mask_pos: マスクを作る画素の特徴に位置の情報を足すか("none": 足さない / "sine": sine の位置の埋め込みを
             1×1 の畳み込み(重みは 0 から)に通して足す)。
+        reid_head: 最後の層のクエリから reid の埋め込みを作る head を持つか(CTVIS・DVIS++ の segmenter。動画の exp00502)。
+        context_head: CAVIS の segmenter(公式の VideoMultiScaleMaskedTransformerDecoder_cavis)にするか。reid_head も要る。
+            最後の層の予測マスクの境界の画素で、周り(context_filter_size × context_filter_size)の平均の特徴を集めた「文脈の特徴」を
+            作り、reid の head の入力を [クエリの埋め込み; 文脈の特徴](2 × 256 次元)にする(_context 参照)。
+        context_filter_size: 文脈の特徴の平均をとる窓の一辺(公式の VIPSeg の設定は 9)。
     """
 
     def __init__(self, num_classes: int = 20, backbone: str = "resnet50.a1_in1k", num_queries: int = 100,
                  dec_layers: int = 9, nhead: int = 8, pretrained: bool = True, pixel_decoder: str = "fpn",
-                 mask_pos: str = "none"):
+                 mask_pos: str = "none", reid_head: bool = False, context_head: bool = False, context_filter_size: int = 9):
         super().__init__()
         # stride 4・8・16・32 の 4 段(R50 では今までと同じ段の番号 (1, 2, 3, 4)。ConvNeXt などは番号が違うので stride で選ぶ。
         # 素の ViT は adapter で 4 段を作る。backbones/__init__.py の create_feature_backbone)
@@ -459,6 +464,21 @@ class Mask2Former(nn.Module):
         self.class_embed = nn.Linear(D_MODEL, num_classes + 1)
         self.mask_embed = nn.Sequential(nn.Linear(D_MODEL, D_MODEL), nn.ReLU(inplace=True), nn.Linear(D_MODEL, D_MODEL),
                                         nn.ReLU(inplace=True), nn.Linear(D_MODEL, D_MODEL))
+        # reid の head(CTVIS・DVIS++ の segmenter。公式の VideoMultiScaleMaskedTransformerDecoder_dvisPlus の reid_embed と同じ):
+        # 最後の層のクエリの埋め込み(LayerNorm の後)から、フレーム間の照合と対照学習に使う埋め込みを作る 3 層の MLP。
+        # 初期化は公式と同じ c2_xavier_fill(kaiming_uniform(a=1)、bias 0)
+        # CAVIS(context_head)は公式の MLP(hidden_dim × 2 → 256 → 256 → 256)と同じく、1 層目の入力が 2 × 256 次元
+        self.reid_embed = None
+        assert reid_head or not context_head, "context_head は reid_head と一緒に使う(CAVIS の segmenter)"
+        self.context_filter_size = context_filter_size if context_head else None
+        if reid_head:
+            d_in = 2 * D_MODEL if context_head else D_MODEL
+            self.reid_embed = nn.Sequential(nn.Linear(d_in, D_MODEL), nn.ReLU(inplace=True), nn.Linear(D_MODEL, D_MODEL),
+                                            nn.ReLU(inplace=True), nn.Linear(D_MODEL, D_MODEL))
+            for layer in self.reid_embed:
+                if isinstance(layer, nn.Linear):
+                    nn.init.kaiming_uniform_(layer.weight, a=1)
+                    nn.init.zeros_(layer.bias)
         self.nhead = nhead
 
     def _predict(self, q: torch.Tensor, mask_feat: torch.Tensor, next_size) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -512,5 +532,32 @@ class Mask2Former(nn.Module):
             q = layer(q, qpos, mems[lvl], poss[lvl], attn)
             logits, masks, attn = self._predict(q, mask_feat, sizes[(i + 1) % 3])
             outs.append({"logits": logits, "masks": masks})
-        outs[-1]["embeds"] = self.decoder_norm(q)  # 最後の層のクエリの埋め込み (B, Q, C)(MinVIS のフレーム間の照合に使う)
+        outs[-1]["embeds"] = self.decoder_norm(q)  # 最後の層のクエリの埋め込み (B, Q, C)(MinVIS のフレーム間の照合・DVIS の入力)
+        outs[-1]["embeds_raw"] = q  # 同じクエリの LayerNorm の前の値 (B, Q, C)(DVIS++ の追跡の部のキー・値)
+        outs[-1]["mask_feat"] = mask_feat  # マスクを作る特徴 (B, C, S/4, S/4)(DVIS の追跡の部がマスクを作るのに使う)
+        if self.context_filter_size is not None:  # CAVIS: reid の埋め込みは [クエリの埋め込み; 文脈の特徴] から作る
+            outs[-1]["reid"] = self.reid_embed(torch.cat([outs[-1]["embeds"], self._context(masks, mask_feat)], -1))
+            # フレーム間の照合の埋め込み (B, Q, 2C)(公式の pred_embds = [LayerNorm の後のクエリ; reid の埋め込み])
+            outs[-1]["embeds_ctx"] = torch.cat([outs[-1]["embeds"], outs[-1]["reid"]], -1)
+        elif self.reid_embed is not None:  # reid の埋め込み (B, Q, C)(CTVIS の対照学習とフレーム間の照合)
+            outs[-1]["reid"] = self.reid_embed(outs[-1]["embeds"])
         return outs
+
+    def _context(self, masks: torch.Tensor, mask_feat: torch.Tensor) -> torch.Tensor:
+        """CAVIS の文脈の特徴(公式の get_context_queries、論文の式 (6))。
+
+        1. 最後の層の予測マスク(> 0、勾配を切る)の境界の画素: 3×3 のラプラシアン([-1 … 8 … -1]、外は 0 で埋める)が正の画素
+           (マスクの中で、周りの 8 画素のどれかがマスクの外か画像の外)
+        2. マスクを作る特徴に k × k の平均の窓をかけ、境界の画素で平均する(境界がなければ 0)
+        公式の窓は畳み込みの重み (C, C, k, k) を全部 1/k² にしたもので、各出力の次元が「全部の入力の次元の和」の k × k の平均になる
+        (出力の C 次元は全部同じ値)。ここでは同じ値を、次元の和に k × k の平均(外は 0 として数える)をかけて計算する(同じ計算で速い)。
+        Args: masks (B, Q, h, w)、mask_feat (B, C, h, w)。Returns: (B, Q, C)。
+        """
+        k = self.context_filter_size
+        m = (masks.detach() > 0).to(mask_feat.dtype)
+        lap = m.new_tensor([[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]]).view(1, 1, 3, 3)
+        bdy = (F.conv2d(rearrange(m, "b q h w -> (b q) 1 h w"), lap, padding=1) > 0).to(mask_feat.dtype)
+        bdy = rearrange(bdy, "(b q) 1 h w -> b q (h w)", b=m.shape[0])  # (B, Q, h·w) 境界の画素
+        x = F.avg_pool2d(mask_feat.sum(1, keepdim=True), k, stride=1, padding=k // 2, count_include_pad=True)  # (B, 1, h, w)
+        ctx = (bdy * rearrange(x, "b 1 h w -> b 1 (h w)")).sum(-1) / (bdy.sum(-1) + 1e-6)  # (B, Q)
+        return ctx[..., None].expand(-1, -1, mask_feat.shape[1])  # (B, Q) -> (B, Q, C)(全部の次元が同じ値。公式と同じ)

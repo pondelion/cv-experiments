@@ -11,6 +11,8 @@
        の損失をかける(割り当てのないクエリは「物体なし」)。損失の中身(交差エントロピー、点を選んだ BCE と Dice)は
        画像の Mask2Former の損失と同じ。
     3. 補助の損失: 層ごとの予測それぞれで 1 の割り当てをやり直し、同じ損失をかけて足す(公式と同じ)。
+       DVIS の学習の前半は、1 の割り当てを、固定した画像のモデルの予測(追跡の部の並びに並べ替えたもの)で 1 回だけ決め、全部の層で使う
+       (公式の DVIS の criterion の matcher_outputs)。
 
 形の記号: B = 区間の数、T = 区間のフレームの数、Q = クエリの数、K = クラスの数、N = 区間の正解の物体の数、
 h・w = 予測のマスクの縦・横、S = 正解のマスクの一辺。
@@ -33,7 +35,8 @@ class VideoConsistentCriterion(Mask2FormerCriterion):
 
     @torch.no_grad()
     def consistent_match(self, logits: torch.Tensor, masks: torch.Tensor, labels: torch.Tensor, tmasks: torch.Tensor,
-                         owner: torch.Tensor, starts: list[int], num_frames: int, counts: list[int]) -> list:
+                         owner: torch.Tensor, starts: list[int], num_frames: int, counts: list[int],
+                         activation: str = "softmax") -> list:
         """区間ごとに、物体が最初に写ったフレームでだけ割り当てて、その組を区間の全フレームで使う。
 
         Args:
@@ -48,7 +51,7 @@ class VideoConsistentCriterion(Mask2FormerCriterion):
         """
         if len(labels) == 0:
             return [(torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long))] * logits.shape[0]
-        cost = match_cost(logits, masks, labels, tmasks, owner)  # (B·T, Q, 全部のフレームの正解の数)
+        cost = match_cost(logits, masks, labels, tmasks, owner, activation)  # (B·T, Q, 全部のフレームの正解の数)
         present = tmasks.flatten(1).any(1).cpu().numpy()  # (全部のフレームの正解の数,) そのフレームに写っているか
         out = []
         for b, n in enumerate(counts):
@@ -70,12 +73,14 @@ class VideoConsistentCriterion(Mask2FormerCriterion):
             out += [pair] * num_frames
         return out
 
-    def forward(self, outs: list[dict], targets: list[dict]) -> tuple[torch.Tensor, dict]:
+    def forward(self, outs: list[dict], targets: list[dict], match_outs: dict | None = None) -> tuple[torch.Tensor, dict]:
         """全部の層の予測の損失を足す。
 
         Args:
-            outs: 層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, h, w)}(VidEoMT.forward の返り値)。
+            outs: 層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, h, w)}(VidEoMT・DVIS の forward の返り値)。
             targets: 区間ごとの {"labels": (N,), "masks": (N, T, S, S) の 0/1}(長さ B)。
+            match_outs: 割り当てを決める別の予測(同じ形)。あれば、割り当てはこの予測で 1 回だけ決め、全部の層で使う
+                (DVIS の学習の前半: 固定した画像のモデルの予測を、追跡の部の並びに並べ替えたもの)。None なら層ごとに割り当てる。
 
         Returns:
             (損失の合計(0 次元), 最終の層の内訳 {"class", "mask", "dice"} の float)。
@@ -90,11 +95,19 @@ class VideoConsistentCriterion(Mask2FormerCriterion):
         owner = torch.repeat_interleave(torch.arange(len(frame_counts), device=labels.device),
                                         torch.as_tensor(frame_counts, device=labels.device))  # (Σ N × T,) どのフレームのものか
         starts = [sum(frame_counts[:i]) for i in range(len(frame_counts))]
+        to_frames = lambda o: {"logits": rearrange(o["logits"], "b t q k -> (b t) q k"),
+                               "masks": rearrange(o["masks"], "b q t h w -> (b t) q h w")}
+        fixed = None
+        if match_outs is not None:  # 割り当てを別の予測で 1 回だけ決め、全部の層で使う(公式の criterion の matcher_outputs と同じ)
+            m = to_frames(match_outs)
+            # segmenter が GTR 系(クラスが sigmoid)のときは、その付け方で費用を作る(match_outs["activation"])
+            fixed = self.consistent_match(m["logits"], m["masks"], labels, tmasks, owner, starts, t, counts,
+                                          match_outs.get("activation", "softmax"))
         total, parts = 0.0, {}
         for k, out in enumerate(outs):
-            frame_out = {"logits": rearrange(out["logits"], "b t q k -> (b t) q k"),
-                         "masks": rearrange(out["masks"], "b q t h w -> (b t) q h w")}
-            indices = self.consistent_match(frame_out["logits"], frame_out["masks"], labels, tmasks, owner, starts, t, counts)
+            frame_out = to_frames(out)
+            indices = fixed if fixed is not None else self.consistent_match(frame_out["logits"], frame_out["masks"], labels,
+                                                                           tmasks, owner, starts, t, counts)
             l = self._one(frame_out, labels, tmasks, owner, starts, indices)
             total = total + W_CLASS * l["class"] + W_MASK * l["mask"] + W_DICE * l["dice"]
             if k == len(outs) - 1:

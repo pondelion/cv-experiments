@@ -670,11 +670,14 @@ def evaluate_video(model: torch.nn.Module, cfg: TrainConfig, set_name: str, epoc
         video_train.evaluate_video_set の結果(AP・image_AP など)+ {"set", "epoch"}。
     """
     from types import SimpleNamespace
-    from segmentation.instance_segmentation.lib_common.video_infer import MinVIS
+    from segmentation.instance_segmentation.lib_common.models.video.image_adapter import ImageSegmenter
+    from segmentation.instance_segmentation.lib_common.models.video.minvis import MinVIS
     from segmentation.instance_segmentation.lib_common.video_train import evaluate_video_set
     torch.cuda.empty_cache()
-    # まとめて処理するフレームの数は学習の micro-batch と同じ(学習で入る大きさなので、推論も GPU のメモリの上限に収まる)
-    tracker = MinVIS(model, chunk=max(cfg.batch_size // cfg.grad_accum, 1))
+    # まとめて処理するフレームの数は学習の micro-batch と同じ(学習で入る大きさなので、推論も GPU のメモリの上限に収まる)。
+    # 画像のモデル(Mask2Former・GTR 系)は ImageSegmenter で同じ形の出力にそろえる
+    seg = ImageSegmenter(model, cfg.arch, crop_to_box=cfg.arch == "gtr_seg" and cfg.gtr_mask_loss == "box_crop")
+    tracker = MinVIS(seg, chunk=max(cfg.batch_size // cfg.grad_accum, 1))
     m = evaluate_video_set(tracker, set_name, SimpleNamespace(size=cfg.size, top_k=cfg.video_top_k, workers=cfg.workers))
     torch.cuda.empty_cache()
     rec = {"set": set_name, "epoch": epoch, **m, "time": datetime.now().isoformat(timespec="seconds")}

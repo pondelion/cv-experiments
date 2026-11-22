@@ -12,8 +12,8 @@
   参考に仕組みと設定の値を読み取り、自前の学習の仕組み(`lib_common/`)の上に自分で書く(公式の関数を写さない)。
   backbone はどれも timm の ResNet-50 にそろえ、backbone より後の部分の方式を比べる
 
-最初の 2 本(自作の Mask2Former 系・公式の RF-DETR-Seg)は、20 クラス・`coco_train_10pct`(9,528 枚)で学習した。精度が低く
-(mask AP 3.6)、1 本に 2〜3 時間かかって比較を何十回も回せないことがわかったので、以降は 8 クラス・学習 2,000 枚
+最初の 2 本(自作の Mask2Former 系・公式の RF-DETR-Seg)は、20 クラス・`coco_train_10pct`(9,528 枚)で学習した。1 本に
+2〜3 時間かかって比較を何十回も回せないことがわかったので、以降は 8 クラス・学習 2,000 枚
 (`coco_train_cls8_2k`)で比べる(経緯は instance_segmentation/README.md の「計画の見直し」)。最初の 2 本の結果は残す。
 
 ## 比べる方式
@@ -28,6 +28,28 @@
 候補から外したもの: ProtoSeg(YOLACT 系)・SOLOv2・SparseInst・RTMDet-Ins(2020〜2022 年。古く、報告されている精度も低い)、
 Mask DINO(2023。DN 学習・two-stage などの部品は、自作の RF-DETR-Seg 系の部品の比較で扱う)。ViT の backbone が前提の EoMT と、
 backbone の蒸留が中心の ECInsSeg は、backbone の比較(exp00105)で扱う。
+
+## 比較対象と実装の参考
+
+| モデル | 使い方 | ライセンス |
+|---|---|---|
+| RF-DETR-Seg(Roboflow) | (1) 公式の学習済みモデルをそのまま評価して、実データで学習した最新モデルの参照点にする(exp00001)。(2) 公式のコード(vendor/rf-detr)の backbone だけを R50 に差し替えた、この exp の比べる相手 | Apache 2.0 |
+| YOLO26-seg(Ultralytics) | 自作は論文だけから作る(公式のコードを写すと AGPL がかかる)。比べる相手は公式のコード(vendor/ultralytics。GitHub には上げない)の backbone だけを差し替えたもの | AGPL-3.0 |
+| Mask2Former | 自作の Mask2Former 系の参考 | MIT |
+| GTR | 自作の GTR 系の参考(公式のコード) | MIT |
+| SAM 3(Meta。facebookresearch/sam3・sam3.pt) | クラス名を与えてそのまま評価する参照点(exp00001)。自動ラベル付け(② ③)とオープンボキャブラリーの蒸留の先生役 | SAM License(重みは利用申請が要る) |
+
+**方式の下調べ(2026-11 時点)**: フェーズ C の exp では、着手する時点で最新の有望な手法を調べ直してから、候補をスクラッチ実装して
+比べる。下はこの exp の候補を選んだときの下調べ(値は各論文・公式の報告で、こちらでは確かめていない)。
+
+| 手法 | 年 | 中身 | 報告されている COCO の mask AP |
+|---|---|---|---|
+| RF-DETR-Seg | 2025〜2026(ICLR 2026) | DINOv2 の backbone + DETR 系の検出の decoder + 軽いマスクのヘッド(クエリと画素の特徴の内積)。構成の探索(NAS)で大きさを決める | 40.3(N)〜49.9(2XL) |
+| ECInsSeg(EdgeCrafter) | 2026-03 | 蒸留で作った小さい ViT + クエリ方式の軽いマスクのヘッド | S 43.0・L 47.1・X 48.4(S は RF-DETR-Seg-S とほぼ同じ精度を約 1/3 のパラメータで) |
+| EoMT | 2025(CVPR 2025) | Mask2Former から pixel decoder・transformer decoder を取り除き、ViT の最後の数層にクエリを入れて、ViT だけでマスクまで出す。単純で速い | 論文で確認する |
+| GTR(Gated Token Recurrence) | 2026-09(arXiv 2609.26590) | 速い密な予測のための新しい構成。RF-DETR-Seg・ECInsSeg より高い mask AP と短い遅延を報告 | 論文で確認する |
+| YOLO26-seg(Ultralytics) | 2026(arXiv 2606.03748) | NMS なしで end-to-end の密な予測の CNN。YOLO11 より mask AP が最大 3.7 上がったと報告 | 論文で確認する |
+| DINOv3 | 2025-08 | backbone(自己教師あり学習)。timm に ViT(tiny〜7B、`vit_*_patch16_dinov3.lvd1689m` など)と ConvNeXt(tiny〜large、`convnext_*.dinov3_lvd1689m`)の重みがあるので、timm から使う | - |
 
 ## 方式ごとの対応と違い(公式・自作)
 
@@ -96,7 +118,7 @@ YOLO26 は論文の本文と付録の表(S5〜S9)、自作はコード(`lib_comm
   最初の 2 本だけ `coco_train_10pct`(20 クラス・9,528 枚)
 - val: `coco_val_dev_cls8`(先頭 500 枚で最良の重みを選び、全体で PQ などの閾値を選ぶ。精度としては報告しない)
 - test: `coco_val_test_cls8`・`voc_val_cls8`(最終の精度はこの 2 つだけで見る)。旧条件の最初の 2 本(20 クラス)は
-  `coco_val_dev`・`voc_val` で評価した。セットの作り方とクラスの内訳は instance_segmentation/README.md
+  `coco_val_dev`・`voc_val` で評価した。セットの作り方とクラスの内訳は [exp00001 の「評価の設定」](../exp00001_eval_and_baselines/README.md#評価の設定)
 - どの方式も batch 16・入力 512。自作は bf16。公式の RF-DETR-Seg・YOLO26-seg は公式の自動の混合精度で、公式の YOLO26-seg は
   勾配の累積で 1 回の更新あたり 64 枚(ほかは 16 枚)
 

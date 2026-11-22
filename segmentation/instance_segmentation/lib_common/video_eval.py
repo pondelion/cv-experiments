@@ -157,3 +157,83 @@ def evaluate_frames(gt: dict, predictions: list[dict]) -> dict:
         pk = precision[:, :, k, 0, -1]
         per_class[cg.cats[cat_id]["name"]] = float(pk[pk > -1].mean()) if (pk > -1).any() else float("nan")
     return {**{k: float(v) for k, v in zip(keys, e.stats[:6])}, "image_per_class_AP": per_class}
+
+
+# ---- J&F(マスクを与えて追う方式の、伝搬だけの出来。DAVIS の公式の評価 davis2017-evaluation と同じ計算) ----
+def _disk(r: int) -> np.ndarray:
+    """半径 r の円の構造要素(skimage.morphology.disk と同じ: x² + y² ≤ r² の格子点)。"""
+    ax = np.arange(-r, r + 1)
+    x, y = np.meshgrid(ax, ax)
+    return (x ** 2 + y ** 2 <= r ** 2).astype(np.uint8)
+
+
+def _seg2bmap(seg: np.ndarray) -> np.ndarray:
+    """マスクの輪郭の 1 画素の幅の地図(公式の _seg2bmap。大きさは変えない場合)。"""
+    seg = seg.astype(bool)
+    e, s, se = np.zeros_like(seg), np.zeros_like(seg), np.zeros_like(seg)
+    e[:, :-1], s[:-1, :], se[:-1, :-1] = seg[:, 1:], seg[1:, :], seg[1:, 1:]
+    b = seg ^ e | seg ^ s | seg ^ se
+    b[-1, :] = seg[-1, :] ^ e[-1, :]
+    b[:, -1] = seg[:, -1] ^ s[:, -1]
+    b[-1, -1] = 0
+    return b
+
+
+def j_score(gt: np.ndarray, pred: np.ndarray) -> float:
+    """J: 領域の IoU(両方とも空なら 1。公式の db_eval_iou)。Args: (H, W) の 0/1。"""
+    gt, pred = gt.astype(bool), pred.astype(bool)
+    union = np.sum(gt | pred)
+    return 1.0 if np.isclose(union, 0) else float(np.sum(gt & pred) / union)
+
+
+def f_score(gt: np.ndarray, pred: np.ndarray, bound_th: float = 0.008) -> float:
+    """F: 輪郭の一致度(輪郭の画素の適合率と再現率の F 値。許容の幅は対角線 × 0.008 の切り上げ。公式の f_measure)。"""
+    import cv2
+    bound_pix = bound_th if bound_th >= 1 else int(np.ceil(bound_th * np.linalg.norm(pred.shape)))
+    fg_b, gt_b = _seg2bmap(pred), _seg2bmap(gt)
+    k = _disk(bound_pix)
+    fg_dil, gt_dil = cv2.dilate(fg_b.astype(np.uint8), k), cv2.dilate(gt_b.astype(np.uint8), k)
+    n_fg, n_gt = fg_b.sum(), gt_b.sum()
+    if n_fg == 0 and n_gt > 0:
+        precision, recall = 1.0, 0.0
+    elif n_fg > 0 and n_gt == 0:
+        precision, recall = 0.0, 1.0
+    elif n_fg == 0 and n_gt == 0:
+        precision, recall = 1.0, 1.0
+    else:
+        precision, recall = float((fg_b * gt_dil).sum() / n_fg), float((gt_b * fg_dil).sum() / n_gt)
+    return 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+
+
+def evaluate_jf(gt: dict, pred_tracks: dict) -> dict:
+    """J&F(マスクを与えて追う方式の評価)。
+
+    各物体は、初めて写ったフレームで正解のマスクを与え(そのフレームは評価から除く。DAVIS の公式が最初のフレームを除くのと同じ)、
+    その後のフレームで予測を評価する。DAVIS の公式と同じく、動画の最後のフレームも除く。物体ごとにフレームの平均をとり、
+    全部の物体で平均する。J&F = (J + F) / 2。
+
+    Args:
+        gt: 共通の形式の正解(dict)。
+        pred_tracks: {正解の物体の id: [フレームごとの RLE か None](予測。与えたフレームより前は使わない)}。
+
+    Returns:
+        {"J&F", "J", "F", "n_objects"}(0〜1)。
+    """
+    videos = {v["id"]: v for v in gt["videos"]}
+    js, fs = [], []
+    for a in gt["annotations"]:
+        segs = a["segmentations"]
+        first = next((t for t, s in enumerate(segs) if s), None)
+        if first is None or a["id"] not in pred_tracks:
+            continue
+        v = videos[a["video_id"]]
+        pred = pred_tracks[a["id"]]
+        jj, ff = [], []
+        for t in range(first + 1, v["length"] - 1):
+            g = mask_util.decode(segs[t]) if segs[t] else np.zeros((v["height"], v["width"]), np.uint8)
+            p = mask_util.decode(pred[t]) if pred[t] else np.zeros((v["height"], v["width"]), np.uint8)
+            jj.append(j_score(g, p)); ff.append(f_score(g, p))
+        if jj:  # 公式の db_statistics の平均(nanmean)
+            js.append(float(np.nanmean(jj))); fs.append(float(np.nanmean(ff)))
+    j, f = (float(np.mean(js)) if js else 0.0), (float(np.mean(fs)) if fs else 0.0)
+    return {"J&F": (j + f) / 2, "J": j, "F": f, "n_objects": len(js)}

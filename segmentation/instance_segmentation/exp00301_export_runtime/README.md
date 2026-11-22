@@ -32,7 +32,7 @@
 ## 測るもの
 
 - 書き出しの確認: ONNX に書き出せるか、ONNX Runtime の出力が PyTorch fp32 と一致するか(出力の差の最大)
-- 遅延(インスタンスセグメンテーションの README の「速度の指標」): 前後の処理込みと、モデルだけ。batch 1・入力 512、warmup を捨てて
+- 遅延([exp00001 の「速度の指標」](../exp00001_eval_and_baselines/README.md#速度の指標)): 前後の処理込みと、モデルだけ。batch 1・入力 512、warmup を捨てて
   複数回測った中央値と p90。GPU は処理の終わりを待ってから時刻を取る
 - 精度: 実際に動かす形式で test(`coco_val_test_cls8`・`voc_val_cls8`)の mask AP を測る(速さと精度で形式を混ぜない)
 - GPU のメモリ(推論中の最大)、パラメータの数・FLOPs
