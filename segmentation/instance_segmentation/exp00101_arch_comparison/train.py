@@ -37,6 +37,8 @@ def main() -> None:
                                                                 "maskrcnn"])
     p.add_argument("--train-set", default="coco_train_cls8_2k")  # 最初の 2 本は coco_train_10pct(20 クラス)
     p.add_argument("--epochs", type=int, default=50)
+    p.add_argument("--epoch-size", type=int, default=None,
+                   help="1 エポックの画像の枚数(省略すると学習のデータを 1 周。指定すると毎エポック無作為に選ぶ)")
     p.add_argument("--eval-every", type=int, default=10)
     p.add_argument("--eval-n", type=int, default=500)
     p.add_argument("--batch-size", type=int, default=16)
@@ -45,6 +47,10 @@ def main() -> None:
     p.add_argument("--max-steps", type=int, default=None)
     # 最初のセット(dev)で途中の評価・最良の重み・PQ の閾値を選び、精度は test・voc で見る(最初の 2 本は 20 クラスの同じ 3 つ)
     p.add_argument("--eval-sets", nargs="+", default=["coco_val_dev_cls8", "coco_val_test_cls8", "voc_val_cls8"])
+    p.add_argument("--test-sets", nargs="+", default=None,
+                   help="学習の途中に全部の画像で評価して記録する test の役のセット(最良の重みの選択には使わない)")
+    p.add_argument("--test-every", type=int, default=10, help="--test-sets の評価の間隔(エポック。--eval-every の倍数)")
+    p.add_argument("--schedule", default=None, help="学習率の変化(train.build_scheduler の名前。constant なら warmup の後は一定)")
     p.add_argument("--eval-only", action="store_true", help="学習せず、runs/{名前}/ の重み(best.pt、なければ last.pt)で評価し直す")
     p.add_argument("--augmentation", default=None,
                    help="学習のデータ拡張(transforms.build_train_transforms の名前。省略すると方式の公式の設定)")
@@ -58,7 +64,7 @@ def main() -> None:
                    help="モデル全体を compile しない方式(gtr_seg など)でも、形が変わらない backbone だけを torch.compile する")
     p.add_argument("--ifan", action="store_true", help="eomt: iFAN の学習の仕組みと推論の点数を足す")
     p.add_argument("--grad-accum", type=int, default=1,
-                   help="1 回の更新(--batch-size 枚)を、batch-size / grad-accum 枚ずつ grad-accum 回に分けて勾配をためる")
+                   help="gradient accumulation steps(micro-batch size = batch-size / grad-accum。batch size は --batch-size のまま)")
     p.add_argument("--grad-checkpoint", action="store_true",
                    help="gtr_seg: backbone とマスクの head で gradient checkpointing を使う(結果は同じで GPU のメモリが減る)")
     p.add_argument("--lr", type=float, default=None, help="学習率(backbone 以外。省略すると方式の設定)")
@@ -86,6 +92,10 @@ def main() -> None:
         recipe["augmentation"] = a.augmentation
     if a.warmup is not None:
         recipe["warmup"] = a.warmup
+    if a.schedule is not None:
+        recipe["schedule"] = a.schedule
+    if a.test_sets:
+        recipe["test_sets"], recipe["test_every"] = a.test_sets, a.test_every
     if a.no_multi_scale:
         recipe["multi_scale"] = False
     if a.no_compile:
@@ -105,7 +115,7 @@ def main() -> None:
             recipe[k] = getattr(a, k)
     cfg = TrainConfig(name=a.name, train_json=str(set_path(a.train_set)), out_dir=str(common.RUNS_DIR),
                       eval_sets=a.eval_sets,
-                      results_dir=str(common.RESULTS_DIR), epochs=a.epochs, eval_every=a.eval_every, eval_n=a.eval_n,
+                      results_dir=str(common.RESULTS_DIR), epochs=a.epochs, epoch_size=a.epoch_size, eval_every=a.eval_every, eval_n=a.eval_n,
                       batch_size=a.batch_size, size=a.size, max_steps=a.max_steps,
                       max_vram_gb=a.max_vram_gb, compile_backbone=a.compile_backbone, **recipe)
     evaluate_saved(cfg) if a.eval_only else train(cfg)

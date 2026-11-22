@@ -62,8 +62,8 @@ def plot_eval_curves(series: dict[str, list[tuple[float, float]]], out_path: Pat
 
 
 def plot_per_class_ap(per_class: dict[str, dict[str, float]], train_images: dict[str, int], out_path: Path,
-                      title: str, legend_outside: bool = False) -> None:
-    """クラスごとの mask AP(評価のセットごとの棒)と、学習データでそのクラスを含む画像の数(折れ線)を 1 枚に描く。
+                      title: str, legend_outside: bool = False, metric: str = "mask AP") -> None:
+    """クラスごとの AP(評価のセットごとの棒)と、学習データでそのクラスを含む画像の数(折れ線)を 1 枚に描く。
 
     クラスは学習の画像の数の多い順に並べる(学習の量と精度の関係を見るため)。
 
@@ -73,6 +73,7 @@ def plot_per_class_ap(per_class: dict[str, dict[str, float]], train_images: dict
         out_path: 保存先の PNG のパス。
         title: 図の題。
         legend_outside: 凡例を図の右の外に出す(棒の系列が多いとき)。
+        metric: 縦軸の指標の名前(既定は "mask AP"。boundary AP の図では "boundary AP")。
     """
     import numpy as np
     names = sorted(train_images, key=lambda n: -train_images[n])
@@ -80,8 +81,8 @@ def plot_per_class_ap(per_class: dict[str, dict[str, float]], train_images: dict
     width = 0.8 / len(per_class)
     for i, (s, ap) in enumerate(per_class.items()):
         ax.bar(np.arange(len(names)) + (i - (len(per_class) - 1) / 2) * width, [100 * ap.get(n, float("nan")) for n in names],
-               width, label=s if legend_outside else f"mask AP: {s}", color=series_style(i, len(per_class))["color"])
-    ax.set(ylabel="mask AP (%)", title=title)
+               width, label=s if legend_outside else f"{metric}: {s}", color=series_style(i, len(per_class))["color"])
+    ax.set(ylabel=f"{metric} (%)", title=title)
     ax.set_xticks(np.arange(len(names)), names, rotation=45, ha="right", fontsize=8)
     ax2 = ax.twinx()
     ax2.plot(np.arange(len(names)), [train_images[n] for n in names], color="gray", marker=".", label="train images")

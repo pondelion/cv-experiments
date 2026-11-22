@@ -220,36 +220,42 @@ class HybridEncoder(nn.Module):
         self.proj = nn.ModuleList(conv_bn(c, dim, act=False) for c in cins)
         self.aifi = AIFILayer(heads, ffn, dim)  # AIFI: 最も粗い段の中の注意
         # ---- ここから CCFF(段どうしの畳み込みの融合)の部品: lateral・fpn(上から下)、down・pan(下から上) ----
+        # 段の数 L(公式は stride 8・16・32 の 3 段。exp00105 では stride 4 を足した 4 段も使う)に対して、どれも L − 1 個
         mid = round(expansion * dim // 2)
         fuse = lambda: FuseBlock(dim, dim, 2 * dim, mid, n, block)  # 足し合わせるので入力も C チャンネル
-        self.lateral = nn.ModuleList(conv_bn(dim, dim, act=False) for _ in range(2))  # stride 32・16 の段の横から
-        self.fpn = nn.ModuleList(fuse() for _ in range(2))  # stride 16・8 を作る
+        k = len(cins) - 1
+        self.lateral = nn.ModuleList(conv_bn(dim, dim, act=False) for _ in range(k))  # 粗い段から順に、横からの 1×1
+        self.fpn = nn.ModuleList(fuse() for _ in range(k))  # 上から下: 粗い方から 2 番目の段 … 最も細かい段を作る
         self.down = nn.ModuleList(nn.Sequential(conv_bn(dim, dim, act=False),
                                                 conv_bn(dim, dim, 3, 2, groups=dim, act=False))
-                                  for _ in range(2))  # stride 8 → 16、16 → 32
-        self.pan = nn.ModuleList(fuse() for _ in range(2))  # stride 16・32 を作る
+                                  for _ in range(k))  # 下から上: 細かい段から順に、1 つ粗い段へ縮める
+        self.pan = nn.ModuleList(fuse() for _ in range(k))  # 下から上: 細かい方から 2 番目の段 … 最も粗い段を作る
         # ---- CCFF の部品はここまで ----
 
     def forward(self, feats: list[torch.Tensor], image_size: tuple[int, int] | None = None) -> list[torch.Tensor]:
-        """3 段の特徴を作る。
+        """段ごとの特徴を作る(段の数は入力と同じ L。3 段なら公式と同じ計算)。
 
         Args:
-            feats: backbone の stride 8・16・32 の段の特徴 [(B, C_i, S/s_i, S/s_i)]。
+            feats: backbone の段の特徴を細かい順に [(B, C_i, S/s_i, S/s_i)](s は 8・16・32、または 4・8・16・32)。
             image_size: 使わない(自作の GTR 系の `Encoder` と呼び方をそろえるための引数)。
 
         Returns:
-            [(B, C, S/8, S/8), (B, C, S/16, S/16), (B, C, S/32, S/32)]。
+            細かい順の [(B, C, S/s_i, S/s_i)]。
         """
-        p3, p4, p5 = [proj(f) for proj, f in zip(self.proj, feats)]  # 段ごとに (B, C_i, h, w) -> (B, C, h, w)
-        p5 = self.aifi(p5)  # AIFI: 最も粗い段(stride 32)だけに自己注意
+        p = [proj(f) for proj, f in zip(self.proj, feats)]  # 段ごとに (B, C_i, h, w) -> (B, C, h, w)
+        p[-1] = self.aifi(p[-1])  # AIFI: 最も粗い段(stride 32)だけに自己注意
         # ---- ここから CCFF(段どうしの畳み込みの融合。FPN の経路 + PAN の経路)----
-        # 上から下(FPN の経路): 粗い段を横からの 1×1 に通し、2 倍に拡大して細かい段と足し、融合のブロックを通す
-        top5 = self.lateral[0](p5)  # (B, C, S/32, S/32)
-        mid4 = self.fpn[0](p4 + F.interpolate(top5, size=p4.shape[-2:], mode="nearest"))  # (B, C, S/16, S/16)
-        top4 = self.lateral[1](mid4)
-        out3 = self.fpn[1](p3 + F.interpolate(top4, size=p3.shape[-2:], mode="nearest"))  # (B, C, S/8, S/8)
+        # 上から下(FPN の経路): 粗い段を横からの 1×1 に通し、2 倍に拡大して 1 つ細かい段と足し、融合のブロックを通す
+        n_lv = len(p)
+        tops = [None] * n_lv  # tops[i] = 段 i の横からの出力(下から上で足す)
+        cur = p[-1]
+        for j in range(n_lv - 1):
+            i = n_lv - 1 - j  # 今の段(粗い方から)
+            tops[i] = self.lateral[j](cur)  # (B, C, h_i, w_i)
+            cur = self.fpn[j](p[i - 1] + F.interpolate(tops[i], size=p[i - 1].shape[-2:], mode="nearest"))  # 段 i − 1
         # 下から上(PAN の経路): 細かい段を stride 2 で縮め、上から下のときの横からの出力と足し、融合のブロックを通す
-        out4 = self.pan[0](self.down[0](out3) + top4)  # (B, C, S/16, S/16)
-        out5 = self.pan[1](self.down[1](out4) + top5)  # (B, C, S/32, S/32)
+        outs = [cur]  # 最も細かい段
+        for j in range(n_lv - 1):
+            outs.append(self.pan[j](self.down[j](outs[-1]) + tops[j + 1]))  # 段 j + 1
         # ---- CCFF はここまで ----
-        return [out3, out4, out5]
+        return outs

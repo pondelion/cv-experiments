@@ -262,12 +262,13 @@ class DecoderLayer(nn.Module):
         dim: クエリの次元(既定は D_MODEL)。
     """
 
-    def __init__(self, groups: int, ffn: int = 1024, heads: int = 8, dim: int = D_MODEL):
+    def __init__(self, groups: int, ffn: int = 1024, heads: int = 8, dim: int = D_MODEL,
+                 points: tuple[int, ...] = NUM_POINTS):
         super().__init__()
         self.groups = groups
         self.self_attn = nn.MultiheadAttention(dim, heads, batch_first=True)
         self.norm1 = nn.LayerNorm(dim)
-        self.cross_attn = MSDeformableAttention(heads, dim=dim)
+        self.cross_attn = MSDeformableAttention(heads, points, dim=dim)
         self.gateway = Gate(dim)
         self.ffn = nn.Sequential(nn.Linear(dim, ffn), nn.SiLU(), nn.Linear(ffn, dim))
         self.norm2 = nn.LayerNorm(dim)
@@ -397,7 +398,7 @@ class GTRSeg(nn.Module):
         num_queries: 1 組のクエリの数 Q。
         groups: 学習のときの組の数 G。
         dec_layers: decoder の層の数。
-        ffn: decoder の FFN の途中の次元(公式の GTR-M は 1024)。
+        ffn: decoder の FFN の中間の次元(公式の GTR-M は 1024)。
         num_dn: denoising のクエリの数の目安。
         pretrained: backbone に timm の事前学習の重みを読むか。
         encoder: "c2f"(`Encoder`。公式の GTR と同じ)/ "hybrid"(RT-DETR の hybrid encoder。ECInsSeg と同じ。exp00103 の A)。
@@ -412,18 +413,28 @@ class GTRSeg(nn.Module):
         enc_block: hybrid encoder の融合のブロックの中の 3×3 のブロック("rep" / "dw"。exp00104 の E3)。
         sdpa_self_attn: decoder の自己注意で注意の重みを返さず、速い scaled_dot_product_attention を使う(計算は同じ。既定は今まで
             どおり False。exp00105 の精度重視の学習を速くするため)。
+        strides: backbone から取り、encoder・decoder で使う段の stride(細かい順。既定は公式と同じ 8・16・32 の 3 段)。
+            (4, 8, 16, 32) にすると stride 4 の段を足す(hybrid encoder だけ。exp00105 の後段を大きくした学習)。そのとき
+            decoder の変形する注意は stride 4 の段で 3 点(stride 8 の段と同じ)を取り、マスクの head は encoder の stride 4 の
+            出力をそのまま使う(3 段のときは stride 8 の出力を stride 4 に拡大して使う)。
     """
 
     def __init__(self, num_classes: int = 8, backbone: str = "resnet50.a1_in1k", num_queries: int = 300, groups: int = 3,
                  dec_layers: int = 4, ffn: int = 1024, num_dn: int = 100, pretrained: bool = True, encoder: str = "c2f",
                  grad_checkpoint: bool = False, dim: int = D_MODEL, enc_expansion: float = 0.75, enc_depth: int = 3,
                  enc_ffn: int = 1024, mask_stride: int = 4, mask_dim: int | None = None, enc_block: str = "rep",
-                 sdpa_self_attn: bool = False):
+                 sdpa_self_attn: bool = False, strides: tuple[int, ...] = STRIDES):
         super().__init__()
         self.num_classes, self.num_queries, self.groups, self.num_dn = num_classes, num_queries, groups, num_dn
         # stride 8・16・32 の段を選ぶ(段の番号は backbone によって違う。R50 では (2, 3, 4)。exp00105)
         # 入力の大きさに位置の情報が固定された backbone(EfficientFormerV2)は、入力 512 に合わせて作り、位置のバイアスを補間して読む
-        self.backbone = create_feature_backbone(backbone, pretrained)
+        self.strides = tuple(strides)
+        if self.strides not in (STRIDES, (4,) + STRIDES):
+            raise ValueError(f"strides は {STRIDES} か {(4,) + STRIDES} だけ: {strides}")
+        if self.strides != STRIDES and encoder != "hybrid":
+            raise ValueError("stride 4 の段を足すのは hybrid encoder だけ")
+        points = NUM_POINTS if self.strides == STRIDES else (NUM_POINTS[0],) + NUM_POINTS  # stride 4 の段は stride 8 と同じ点の数
+        self.backbone = create_feature_backbone(backbone, pretrained, strides=self.strides)
         cins = self.backbone.feature_info.channels()
         # 入力はデータの変換で ImageNet の平均・標準偏差で正規化してある。事前学習の正規化が違う backbone(平均・標準偏差 0.5 など)は、
         # backbone の入口でその正規化に直す(同じなら何もしない。学習の重みには入れない)
@@ -457,7 +468,7 @@ class GTRSeg(nn.Module):
         self.pre_bbox_head = MLP(dim, dim, 4, 3)
         nn.init.zeros_(self.pre_bbox_head.layers[-1].weight)
         nn.init.zeros_(self.pre_bbox_head.layers[-1].bias)
-        self.layers = nn.ModuleList(DecoderLayer(groups, ffn, dim=dim) for _ in range(dec_layers))
+        self.layers = nn.ModuleList(DecoderLayer(groups, ffn, dim=dim, points=points) for _ in range(dec_layers))
         for layer in self.layers:
             layer.sdpa = sdpa_self_attn
         self.score_head = nn.ModuleList(nn.Linear(dim, num_classes) for _ in range(dec_layers))
@@ -473,20 +484,21 @@ class GTRSeg(nn.Module):
         self.register_buffer("project", distance_bins(), persistent=False)  # (R,)
 
     def _anchors(self, shapes: list[tuple[int, int]], device) -> tuple[torch.Tensor, torch.Tensor]:
-        """two-stage の候補の枠: 段ごとの全部の画素の中心に、段が 1 つ粗くなるごとに 2 倍の大きさの正方形の枠を置く。
+        """two-stage の候補の枠: 段ごとの全部の画素の中心に、一辺が 0.05 × stride / 8 の正方形の枠を置く(stride 8・16・32 の
+        3 段なら公式と同じく 0.05・0.1・0.2。stride 4 の段を足したときは 0.025)。
 
         Args:
-            shapes: 段ごとの (h, w)(stride 8・16・32 の順)。
+            shapes: 段ごとの (h, w)(self.strides の順)。
             device: 置く装置。
 
         Returns:
             (枠のロジット (1, N, 4)、使えない所は inf, 使える候補か (1, N, 1))。
         """
         out = []
-        for lvl, (h, w) in enumerate(shapes):
+        for s, (h, w) in zip(self.strides, shapes):
             ys, xs = torch.meshgrid(torch.arange(h, device=device), torch.arange(w, device=device), indexing="ij")
             xy = (torch.stack([xs, ys], -1).float() + 0.5) / torch.tensor([w, h], device=device)  # (h, w, 2)
-            wh = torch.full_like(xy, 0.05 * 2.0 ** lvl)
+            wh = torch.full_like(xy, 0.05 * s / STRIDES[0])
             out.append(rearrange(torch.cat([xy, wh], -1), "h w four -> (h w) four"))
         anchors = torch.cat(out)[None]  # (1, N, 4)
         valid = ((anchors > 0.01) & (anchors < 0.99)).all(-1, keepdim=True)

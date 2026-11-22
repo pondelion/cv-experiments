@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # exp00105: 速度バランス型の backbone の学習を、引数の順に 1 本ずつ流す(この列を 2 つ同時に動かす)。
 # 方式は exp00104 の G1 + E2(64) + E3。batch 16 のまま、1 本あたりの GPU のメモリの上限を 15GB にする。
-# メモリが足りずに止まったときだけ、batch を 8 × 2 回の勾配の累積にしてやり直す(1 回の更新あたり 16 枚のまま)。
+# メモリが足りずに止まったときだけ、micro-batch size 8・gradient accumulation steps 2 でやり直す(batch size は 16 のまま)。
 # 使い方(リポジトリ直下で): bash segmentation/instance_segmentation/exp00105_backbone/run_light.sh 短い名前=timm の名前 ...
 E=segmentation/instance_segmentation/exp00105_backbone
 KW='{"dim": 192, "ffn": 512, "mask_dim": 64, "enc_block": "dw"}'

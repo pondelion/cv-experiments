@@ -23,6 +23,8 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 
+from segmentation.instance_segmentation.lib_common.backbones import create_feature_backbone
+
 D_MODEL = 256
 
 
@@ -431,7 +433,9 @@ class Mask2Former(nn.Module):
                  dec_layers: int = 9, nhead: int = 8, pretrained: bool = True, pixel_decoder: str = "fpn",
                  mask_pos: str = "none"):
         super().__init__()
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, features_only=True, out_indices=(1, 2, 3, 4))
+        # stride 4・8・16・32 の 4 段(R50 では今までと同じ段の番号 (1, 2, 3, 4)。ConvNeXt などは番号が違うので stride で選ぶ。
+        # 素の ViT は adapter で 4 段を作る。backbones/__init__.py の create_feature_backbone)
+        self.backbone = create_feature_backbone(backbone, pretrained, strides=(4, 8, 16, 32))
         decoders = {"fpn": PixelDecoder, "fpn_m2f": M2FPixelDecoder, "msdeform": DeformablePixelDecoder,
                     "unet": UnetPixelDecoder,
                     # UNet の確かめ用: 渡す特徴を 3×3 + GN + ReLU でそろえる / さらに UNet の幅を全部 256 にする

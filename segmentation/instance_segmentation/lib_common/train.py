@@ -41,7 +41,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim.swa_utils import AveragedModel
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 
 from lib_common import REPO_ROOT
 from lib_common.datasets import load_set, set_path
@@ -87,10 +87,15 @@ class TrainConfig:
     # 評価のセット: 最初(dev)は途中の評価・最良の重み・PQ の閾値を選ぶのに使い、精度は test(dev と画像が重ならない)と voc で見る
     eval_sets: list = field(default_factory=lambda: ["coco_val_dev_cls8", "coco_val_test_cls8", "voc_val_cls8"])
     eval_n: int = 500  # 途中の評価に使う枚数(最初の評価のセットの先頭)
+    test_sets: list = field(default_factory=list)  # 学習の途中に全部の画像で評価して記録する test の役のセット(選択には使わない)
+    test_every: int = 10  # test_sets の評価の間隔(エポック。eval_every の倍数にする)
     size: int = 512
     batch_size: int = 16
     workers: int = 8
     epochs: int = 50
+    # 1 エポックの画像の枚数(None なら学習のデータを 1 周。指定すると、毎エポックそれだけの枚数を学習のデータから無作為に選ぶ。
+    # 動画のフレームのように画像が多いとき、エポックを細かく区切って途中の評価の間隔を動画のモデルと揃えるため)
+    epoch_size: int | None = None
     eval_every: int = 10
     lr: float = 1e-4
     backbone_lr_mult: float = 0.1
@@ -105,7 +110,7 @@ class TrainConfig:
     model_kwargs: dict = field(default_factory=dict)
     gtr_mask_loss: str = "points"  # gtr_seg のマスクの損失("points": 公式の GTR と同じ / "box_crop": D-FINE-seg と同じ)
     ifan: bool = False  # eomt: iFAN(マスクの質の head と、質の BCE・APMR・CLSD の損失、質を使う推論の点数)を足す
-    grad_accum: int = 1  # 1 回の更新(batch_size 枚)を、batch_size / grad_accum 枚のまとめ grad_accum 回に分けて勾配をためる
+    grad_accum: int = 1  # gradient accumulation steps(micro-batch size = batch_size / grad_accum。optimizer step 1 回あたりは batch_size 枚)
     grad_checkpoint: bool = False  # gtr_seg: backbone とマスクの head で gradient checkpointing を使う(結果は同じ、メモリが減り少し遅い)
     seed: int = 0
     max_steps: int | None = None  # 動作確認用(この回数で止める)
@@ -236,7 +241,11 @@ def build_model(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
         model = MaskRCNNSeg(num_classes, cfg.backbone, size=cfg.size)
     else:
         raise ValueError(f"知らないモデルの方式: {cfg.arch}")
-    return model.cuda().to(memory_format=torch.channels_last)
+    model = model.cuda()
+    for t in list(model.parameters()) + list(model.buffers()):  # 4 次元の重み(2 次元の畳み込み)だけ。5 次元(Qwen3-VL の 3 次元の畳み込み)は変えない
+        if t.dim() == 4:
+            t.data = t.data.contiguous(memory_format=torch.channels_last)
+    return model
 
 
 def build_criterion(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
@@ -344,8 +353,10 @@ def build_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.Opt
     norm_types = (torch.nn.modules.batchnorm._BatchNorm, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.Embedding)
     no_decay = {id(p) for mod in model.modules() if isinstance(mod, norm_types) for p in mod.parameters(recurse=False)}
     groups = []
+    # ViT の adapter の STA と融合の層は学習済みの重みがないので、backbone の倍率をかけない(gtr_seg と同じ。ほかの backbone は今までと同じ)
+    in_bb = lambda n: n.startswith("backbone.") and not n.startswith(("backbone.sta.", "backbone.fuse."))
     for is_bb, lr in [(True, cfg.lr * cfg.backbone_lr_mult), (False, cfg.lr)]:
-        ps = [p for n, p in model.named_parameters() if n.startswith("backbone.") == is_bb]
+        ps = [p for n, p in model.named_parameters() if in_bb(n) == is_bb]
         groups += [{"params": [p for p in ps if id(p) not in no_decay], "lr": lr, "weight_decay": cfg.weight_decay},
                    {"params": [p for p in ps if id(p) in no_decay], "lr": lr, "weight_decay": 0.0}]
     return torch.optim.AdamW(groups, fused=True)
@@ -402,7 +413,7 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             detectron2)。
         lrf: schedule="linear" の最後の倍率 / "flatcosine" の最小の倍率。
         flat_frac, tail_frac: schedule="flatcosine" の一定の所までの割合と、最後の最小のままの割合。
-        backbone_warmup: 0 より大きいと 2 段の warmup(公式の EoMT の TwoStageWarmupPolySchedule。schedule は poly)。
+        backbone_warmup: 0 より大きいと 2 段の warmup(公式の EoMT の TwoStageWarmupPolySchedule。schedule は poly か constant)。
             param_groups の "backbone" が True の組は、最初の warmup 回は 0、次の backbone_warmup 回で上げ、その後 poly で 0 へ。
             ほかの組は warmup 回で上げ、その後 poly で 0 へ。
 
@@ -458,6 +469,8 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
                 return 0.0
             if step < start + length:
                 return (step - start) / length
+            if schedule == "constant":  # warmup の後は一定(exp00502 の学習の量を見る学習)
+                return 1.0
             return max(0.0, 1 - (step - start - length) / max(1, total_steps - start - length)) ** 0.9
         return f
 
@@ -497,7 +510,7 @@ def train_one_epoch(forward, model: torch.nn.Module, criterion: torch.nn.Module,
     model.train()
     sums, n = {}, 0
     scales = batch_scales(cfg.size)
-    accum = cfg.grad_accum  # 1 回の更新に使うまとめの数(まとめは batch_size / accum 枚)
+    accum = cfg.grad_accum  # gradient accumulation steps(micro-batch size は batch_size / accum)
     for i, batch in enumerate(loader):
         images = batch["image"].cuda(non_blocking=True)  # (B, 3, S, S)
         if cfg.multi_scale:
@@ -645,6 +658,24 @@ def evaluate_quick(model: torch.nn.Module, cfg: TrainConfig, quick_set: str, epo
     return rec
 
 
+def evaluate_test(model: torch.nn.Module, cfg: TrainConfig, epoch: int, log) -> dict:
+    """学習の途中に、test の役のセット(cfg.test_sets)の全部の画像で mask・box の AP を測って記録する(重みの選択には使わない)。
+
+    Returns:
+        {セット名: {"segm", "bbox", "per_class_segm_AP"}}。
+    """
+    out = {}
+    for s in cfg.test_sets:
+        te = time.perf_counter()
+        preds, _ = predict(model, s, cfg)
+        m = evaluate(s, preds, boundary=False, pixel=False) if preds else {"segm": {"AP": 0.0}, "bbox": {"AP": 0.0}}
+        out[s] = {"segm": m["segm"], "bbox": m["bbox"], "per_class_segm_AP": m.get("per_class_segm_AP", {}),
+                  "eval_s": round(time.perf_counter() - te, 1)}
+        log.write(json.dumps({"test": {"epoch": epoch, "set": s, **out[s]}}) + "\n"), log.flush()
+        print(f"[test] epoch {epoch} {s}: mask AP {m['segm']['AP']:.4f} | box AP {m['bbox']['AP']:.4f}", flush=True)
+    return out
+
+
 def evaluate_final(model: torch.nn.Module, cfg: TrainConfig) -> dict:
     """最後の評価: 全部の評価のセットで測る。最初のセットで PQ などのスコアの閾値を選び、ほかのセットにはその値を使う。
 
@@ -712,7 +743,9 @@ def train(cfg: TrainConfig) -> dict:
         """
         cls = MosaicInstanceDataset if augmentation == "yolo_mosaic" else InstanceDataset
         ds = cls(cfg.train_json, build_train_transforms(augmentation, cfg.size))
-        return ds, DataLoader(ds, batch_size=cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=cfg.workers,
+        sampler = RandomSampler(ds, num_samples=cfg.epoch_size) if cfg.epoch_size else None
+        return ds, DataLoader(ds, batch_size=cfg.batch_size // cfg.grad_accum, shuffle=sampler is None, sampler=sampler,
+                              num_workers=cfg.workers,
                               collate_fn=collate, drop_last=True, persistent_workers=True, pin_memory=True)
 
     train_ds, loader = make_loader(cfg.augmentation)
@@ -738,6 +771,8 @@ def train(cfg: TrainConfig) -> dict:
             log.write(json.dumps({"epoch_end": epoch, "step": step, **losses, **timestamp(t0)}) + "\n"), log.flush()
             if step >= total or epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
                 history.append(evaluate_quick(eval_model, cfg, quick, epoch, step, log))
+                if cfg.test_sets and (epoch % cfg.test_every == 0 or step >= total or epoch == cfg.epochs):
+                    history[-1]["test"] = evaluate_test(eval_model, cfg, epoch, log)  # 記録だけ(最良の重みの選択には使わない)
                 torch.save(eval_model.state_dict(), out_dir / "last.pt")
                 if history[-1]["segm"]["AP"] >= max(h["segm"]["AP"] for h in history):  # 途中の評価の mask AP が最良の重み
                     torch.save(eval_model.state_dict(), out_dir / "best.pt")

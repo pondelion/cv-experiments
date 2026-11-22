@@ -9,6 +9,7 @@ CV の実験で使うデータセットの置き場。データは git の対象
 | `sets/` | 上のデータを、実験のクラス(VOC の 20 クラス)にそろえた COCO 形式の JSON | 評価のセット・実データの学習のセット | `lib_common/datasets.py` で作る |
 | `vipseg/VIPSeg/` | VIPSeg(動画のパノプティックセグメンテーション) | `imgs/{動画}/`(フレーム)・`panomasks/{動画}/`(16 ビットの PNG。物体は「クラス × 100 + 物体の番号」、クラスの値は 1 始まりで 0 は VOID)・`train.txt`(2,806 本)・`val.txt`(343 本)・`test.txt`(387 本、正解なし)・`VIPSeg_720P/panoVIPSeg_categories.json`(124 クラス、id は 0 始まり) | 公式の Google Drive の `VIPSeg.tar` を展開 |
 | `lvvis/` | LV-VIS(オープンボキャブラリーの動画インスタンスセグメンテーション) | `train/JPEGImages/`(3,076 本)・`val/JPEGImages/`(837 本)・`train_instances.json`・`val_instances.json`・`val_instances_oracle.json`(YouTube-VIS 2019 と同じ形式) | 公式の Google Drive の zip を展開 |
+| `kinetics400/` | Kinetics-400 の train の一部(動画の自己教師ありの学習用。ラベルは使わない) | `train/{YouTube の ID}_{開始秒}_{終了秒}.mp4`(36,991 本・54GB。約 10 秒のクリップ)・`train.csv`(公式の注釈)・`k400_train_path.txt`(公式の 242 個の分割の URL)・`selected_parts.txt`(使った 37 個) | CVDF の配布元の分割から seed 0 で 37 個を選んで展開。VIPSeg と YouTube の ID が重なるクリップ(この 37 個の中では 2 本)と、大きさ 0 の壊れたファイル 7 本を消した。400 クラスが全部入り、1 クラスあたり最小 23・中央値 89.5・最大 171 本 |
 
 ## 出典・利用条件
 
