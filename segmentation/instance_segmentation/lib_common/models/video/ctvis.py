@@ -46,5 +46,13 @@ class CTVIS(nn.Module):
 
     @torch.no_grad()
     def predict_video(self, frames: torch.Tensor, chunk: int = 8) -> tuple[torch.Tensor, torch.Tensor]:
-        """隣のフレームのクエリを reid の埋め込みで照合する(MinVIS と同じ形で返す)。"""
+        """隣のフレームのクエリを reid の埋め込みで照合する(MinVIS と同じ形で返す)。
+
+        Args:
+            frames: (T, 3, S, S)。
+            chunk: segmenter でまとめて処理するフレームの数。
+
+        Returns:
+            (フレームごとのクラスの値 (T, Q, K+1), マスクの値 (Q, T, h, w))(クエリの枠 = ID)。
+        """
         return MinVIS(self.segmenter, chunk, embed_key="reid").predict_video(frames)

@@ -17,6 +17,10 @@ KINETICS_BROKEN = REPO_ROOT / "datasets/kinetics400/broken.txt"  # 開けない�
 
 
 def kinetics_files() -> list[str]:
-    """Kinetics-400 の学習に使う動画のパス(開けない動画を除く)。"""
+    """Kinetics-400 の学習に使う動画のパス(開けない動画を除く)。
+
+    Returns:
+        動画のパスの並び。
+    """
     broken = set(KINETICS_BROKEN.read_text().split()) if KINETICS_BROKEN.exists() else set()
     return sorted(str(f) for f in KINETICS_TRAIN.glob("*.mp4") if f.name not in broken)

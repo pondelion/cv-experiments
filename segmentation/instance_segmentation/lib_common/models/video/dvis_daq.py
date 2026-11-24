@@ -47,20 +47,39 @@ from segmentation.instance_segmentation.lib_common.models.mask2former import D_M
 
 
 def _xavier(module: nn.Module) -> None:
-    """2 次元以上の重みを xavier_uniform で初期化する(公式の各層の _reset_parameters と同じ)。"""
+    """2 次元以上の重みを xavier_uniform で初期化する(公式の各層の _reset_parameters と同じ)。
+
+    Args:
+        module: 初期化する層。
+    """
     for p in module.parameters():
         if p.dim() > 1:
             nn.init.xavier_uniform_(p)
 
 
 def _mlp(d_in: int, d_hidden: int, d_out: int) -> nn.Sequential:
-    """3 層の MLP(層の間は ReLU。公式の MLP と同じ)。"""
+    """3 層の MLP(層の間は ReLU。公式の MLP と同じ)。
+
+    Args:
+        d_in: 入力の次元。
+        d_hidden: 中間の次元。
+        d_out: 出力の次元。
+
+    Returns:
+        nn.Sequential。
+    """
     return nn.Sequential(nn.Linear(d_in, d_hidden), nn.ReLU(inplace=True), nn.Linear(d_hidden, d_hidden), nn.ReLU(inplace=True),
                          nn.Linear(d_hidden, d_out))
 
 
 class TrackLayer(nn.Module):
-    """追跡の部の 1 層: cross-attention(位置の埋め込みあり)→ self-attention → FFN(どれも残差 + LayerNorm の後置き)。"""
+    """追跡の部の 1 層: cross-attention(位置の埋め込みあり)→ self-attention → FFN(どれも残差 + LayerNorm の後置き)。
+
+    Args:
+        d: 次元。
+        nhead: 注意の頭の数。
+        ffn: FFN の中間の次元。
+    """
 
     def __init__(self, d: int = D_MODEL, nhead: int = 8, ffn: int = 2048):
         super().__init__()
@@ -71,7 +90,17 @@ class TrackLayer(nn.Module):
         _xavier(self.cross); _xavier(self.self_attn); _xavier(self.ffn)
 
     def forward(self, x, memory, query_pos=None, pos=None):
-        """Args: x (1, R, C)、memory (1, Q, C)、query_pos (1, R, C) か None、pos (1, Q, C) か None。Returns: (1, R, C)。"""
+        """1 層進める。
+
+        Args:
+            x: 追跡のクエリ (1, R, C)。
+            memory: 今のフレームの segmenter のクエリ (1, Q, C)。
+            query_pos: 追跡のクエリの位置の埋め込み (1, R, C) か None。
+            pos: memory の位置の埋め込み (1, Q, C) か None。
+
+        Returns:
+            (1, R, C)。
+        """
         q = x if query_pos is None else x + query_pos
         k = memory if pos is None else memory + pos
         x = self.norms[0](x + self.cross(q, k, memory, need_weights=False)[0])
@@ -84,6 +113,11 @@ class SlotLayer(nn.Module):
 
     cross-attention の出力 a を入力、x + a をキーにした slot attention(slot どうしで入力を取り合う: softmax を slot の軸でとり、
     1e-6 を足して入力の軸で正規化した重みで入力を平均する)の結果を x に足して LayerNorm → FFN。
+
+    Args:
+        d: 次元。
+        nhead: 注意の頭の数。
+        ffn: FFN の中間の次元。
     """
 
     def __init__(self, d: int = D_MODEL, nhead: int = 8, ffn: int = 2048):
@@ -100,8 +134,18 @@ class SlotLayer(nn.Module):
         self.scale = d ** -0.5
 
     def forward(self, x, memory, query_pos, slot_query, memory_mask=None):
-        """Args: x (1, S, C)(slot の数 S)、memory (1, Q, C)、query_pos・slot_query (1, S, C)、memory_mask (S, Q) の bool(True = 見ない)
-        か None。Returns: (1, S, C)。"""
+        """1 層進める。
+
+        Args:
+            x: slot の特徴 (1, S, C)(S = slot の数)。
+            memory: 今のフレームの segmenter のクエリ (1, Q, C)。
+            query_pos: slot の位置の埋め込み (1, S, C)。
+            slot_query: slot attention の問い (1, S, C)。
+            memory_mask: (S, Q) の bool(True = 見ない)か None。
+
+        Returns:
+            (1, S, C)。
+        """
         mask = None if memory_mask is None else memory_mask.repeat(self.nhead, 1, 1)  # (頭の数, S, Q)
         a = self.cross(x + query_pos, memory, memory, attn_mask=mask, need_weights=False)[0]  # (1, S, C)
         k = self.project_k(self.norm_inputs(x + a))  # (1, S, C)
@@ -114,7 +158,12 @@ class SlotLayer(nn.Module):
 
 
 class InstanceSequence:
-    """1 つの ID の記録(公式の VideoInstanceSequence のうち使う部分)。"""
+    """1 つの ID の記録(公式の VideoInstanceSequence のうち使う部分)。
+
+    Args:
+        start: ID が始まったフレームの番号。
+        cache: 位置の埋め込みを混ぜるのに使う過去のフレームの数(公式は 10)。
+    """
 
     def __init__(self, start: int, cache: int = 10):
         self.start, self.cache = start, cache
@@ -123,7 +172,11 @@ class InstanceSequence:
         self.invalid, self.dead = 0, False
 
     def update_pos(self, pos: torch.Tensor) -> None:
-        """位置の埋め込み (C,) を足して、混ぜたものを更新する(過去の最大 cache フレームとの cos の平均を重みにする)。"""
+        """位置の埋め込みを足して、混ぜたものを更新する(過去の最大 cache フレームとの cos の平均を重みにする)。
+
+        Args:
+            pos: 今のフレームの位置の埋め込み (C,)。
+        """
         self.pos.append(pos)
         if len(self.pos) == 1:
             self.fused_pos = pos
@@ -164,18 +217,44 @@ class DAQTracker(nn.Module):
 
     # ---- 共通の部品 ----
     def predict(self, x: torch.Tensor, mask_feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Args: x (L, R, C)(層ごと)、mask_feat (C, h, w)(射影の後)。Returns: (クラスの値 (L, R, K+1), マスクの値 (L, R, h, w))。"""
+        """層ごとの出力からクラスとマスクを出す。
+
+        Args:
+            x: 層ごとの出力 (L, R, C)。
+            mask_feat: マスクを作る特徴 (C, h, w)(射影の後)。
+
+        Returns:
+            (クラスの値 (L, R, K+1), マスクの値 (L, R, h, w))。
+        """
         x = self.decoder_norm(x)
         return self.class_embed(x), torch.einsum("lrc,chw->lrhw", self.mask_embed(x), mask_feat)
 
     def mask_pos(self, mask_logits: torch.Tensor, mask_feat: torch.Tensor) -> torch.Tensor:
-        """位置の埋め込み: マスク(sigmoid > 0.5)の中の特徴の平均を MLP に通す。Args: (R, h, w)、(C, h, w)(射影の前)。Returns: (R, C)。"""
+        """位置の埋め込み: マスク(sigmoid > 0.5)の中の特徴の平均を MLP に通す。
+
+        Args:
+            mask_logits: マスクの値 (R, h, w)。
+            mask_feat: マスクを作る特徴 (C, h, w)(射影の前)。
+
+        Returns:
+            (R, C)。
+        """
         m = (mask_logits.sigmoid() > 0.5).to(mask_feat.dtype)
         pooled = torch.einsum("rhw,chw->rc", m, mask_feat) / (m.flatten(1).sum(-1, keepdim=True) + 1e-8)
         return self.pos_embed(pooled)
 
     def _track_layers(self, x, memory, query_pos=None, pos=None) -> torch.Tensor:
-        """Args: x (R, C)、memory (Q, C)。Returns: 入力 + 各層の出力 (L + 1, R, C)。"""
+        """追跡の部の層を順にかける。
+
+        Args:
+            x: 追跡のクエリ (R, C)。
+            memory: 今のフレームの segmenter のクエリ (Q, C)。
+            query_pos: 追跡のクエリの位置の埋め込み (R, C) か None。
+            pos: memory の位置の埋め込み (Q, C) か None。
+
+        Returns:
+            入力 + 各層の出力 (L + 1, R, C)。
+        """
         outs = [x]
         y = x[None]
         for layer in self.layers:
@@ -184,8 +263,18 @@ class DAQTracker(nn.Module):
         return torch.stack(outs)
 
     def _slots(self, track_q, track_pos, memory, seg_query_feat, memory_mask=None) -> torch.Tensor:
-        """slot の枝。Args: 追跡のクエリ (R, C)・その位置 (R, C)・memory (Q, C)・segmenter の学習するクエリの特徴 (Q, C)。
-        Returns: 各層の出力 (L, R + 背景の slot の数, C)。"""
+        """slot の枝(追跡のクエリ + 背景の slot が、今のフレームのクエリを取り合う)。
+
+        Args:
+            track_q: 追跡のクエリ (R, C)。
+            track_pos: 追跡のクエリの位置の埋め込み (R, C)。
+            memory: 今のフレームの segmenter のクエリ (Q, C)。
+            seg_query_feat: segmenter の学習するクエリの特徴 (Q, C)(slot の初期の特徴に使う)。
+            memory_mask: (slot の数, Q) の bool(True = 見ない)か None。
+
+        Returns:
+            各層の出力 (L, R + 背景の slot の数, C)。
+        """
         bg = self.bg_slots.weight
         pos = torch.cat([track_q, bg])  # 公式: slots_pos = [追跡のクエリ, 背景]
         slot_query = torch.cat([track_pos, bg])  # 公式: slots_query = [追跡の位置, 背景]
@@ -348,7 +437,10 @@ def frame_match(logits: torch.Tensor, masks: torch.Tensor, target: dict, aux_thr
     """segmenter の予測と、そのフレームに写っている物体の割り当て(公式の FrameMatcher)。
 
     Args:
-        logits: (Q, K+1)。masks: (Q, h, w)。target: {"labels": (N,), "masks": (N, H, W), "valid": (N,)}。aux_thr: 物体らしい点数。
+        logits: クラスの値 (Q, K+1)。
+        masks: マスクの値 (Q, h, w)。
+        target: そのフレームの正解 {"labels": (N,), "masks": (N, H, W), "valid": (N,)(そのフレームに写っているか)}。
+        aux_thr: 物体らしい点数の閾値(公式は 0.01)。
 
     Returns:
         ((クエリ, 物体)(写っている物体だけ), (全部のクエリ, クエリごとの物体の番号(物体らしくないクエリは −1)))。
@@ -381,7 +473,10 @@ def new_ins_match(logits: torch.Tensor, masks: torch.Tensor, target: dict, prev_
     ハンガリアン法で割り当てる(公式の NewInsHungarianMatcher)。
 
     Args:
-        logits: (R + P, K+1)。masks: (R + P, h, w)。target: frame_match と同じ。prev_idx: 前のフレームの (追跡のクエリ, 物体)。
+        logits: クラスの値 (R + P, K+1)。
+        masks: マスクの値 (R + P, h, w)。
+        target: frame_match と同じ。
+        prev_idx: 前のフレームの (追跡のクエリ, 物体)。
         num_new: 新しい物体を探すクエリの数 P(並びの最後の P 個)。
 
     Returns:
@@ -420,7 +515,9 @@ def daq_loss(outputs: list[dict], frame_targets: list[dict], class_weight: torch
     物体はそのクラス、ほかは物体なし)。マスク: 同じ組の点を選んだ BCE と Dice を、全部のフレームの割り当ての数で割る。
 
     Args:
-        outputs: train_clip の出力(またはその slot の出力)。frame_targets: 同じフレームの正解。class_weight: (K+1,)(物体なしは 0.1)。
+        outputs: train_clip の出力(またはその slot の出力)。
+        frame_targets: 同じフレームの正解。
+        class_weight: クラスの損失の重み (K+1,)(物体なしは 0.1)。
 
     Returns:
         (損失の合計, 最後の層の内訳 {"class", "mask", "dice"})。
@@ -486,12 +583,28 @@ class DVISDAQOnline(nn.Module):
         self.register_buffer("class_weight", torch.cat([torch.ones(num_classes), torch.tensor([EOS_COEF])]))
 
     def train(self, mode: bool = True):
+        """学習の状態を切り替える(segmenter は公式と同じく eval のまま)。
+
+        Args:
+            mode: True で学習の状態。
+
+        Returns:
+            self。
+        """
         super().train(mode)
         self.segmenter.eval()  # 公式と同じく segmenter は eval のまま
         return self
 
     @torch.no_grad()
     def _segment(self, frames: torch.Tensor) -> dict:
+        """固定した segmenter をフレームにかける。
+
+        Args:
+            frames: (M, 3, S, S)。
+
+        Returns:
+            最後の層の {"embeds", "logits", "masks", "mask_feat"}(勾配なし)。
+        """
         out = self.segmenter(frames)[-1]
         return {k: out[k].detach() for k in ("embeds", "logits", "masks", "mask_feat")}
 
@@ -499,7 +612,9 @@ class DVISDAQOnline(nn.Module):
         """学習の損失(区間ごとに追跡の部を通し、追跡の出力と slot の出力の損失を足す)。
 
         Args:
-            clips: (B, T, 3, S, S)。targets: 区間ごとの {"labels": (N,), "masks": (N, T, S, S)}。progress: 学習の進み(0〜1)。
+            clips: (B, T, 3, S, S)。
+            targets: 区間ごとの {"labels": (N,), "masks": (N, T, S, S)}。
+            progress: 学習の進み(0〜1。最初の first_stage_frac は段階 2 の 2 枚で学習する)。
 
         Returns:
             (損失の合計(区間で平均), 内訳)。
@@ -530,6 +645,10 @@ class DVISDAQOnline(nn.Module):
     @torch.no_grad()
     def predict_video(self, frames: torch.Tensor, chunk: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
         """1 本の動画を時刻の順に処理し、ID ごとの予測にする(公式の run_window_inference。segmenter は 5 枚ずつ)。
+
+        Args:
+            frames: (T, 3, S, S)。
+            chunk: segmenter でまとめて処理するフレームの数(公式は 5)。
 
         Returns:
             (ID ごとの動画のクラスの値 (R, K+1)(記録したフレームの平均。公式と同じ), マスクの値 (R, T, h, w)(記録のないフレームは −1e4))。

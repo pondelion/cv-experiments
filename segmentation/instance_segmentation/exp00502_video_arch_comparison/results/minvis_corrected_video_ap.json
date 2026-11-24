@@ -1,0 +1,5 @@
+{
+ "note": "MinVIS の学習中の動画の評価(train_log.jsonl の video_eval)は、画像のセットと動画のセットのクラスの並びの違い(person と car)を直す前の値なので使わない。直した後のコードで、保存してある重み(25 エポック = best.pt、50 エポック = last.pt)を測り直した値(%)。val は最良の重み(25 エポック)の最後の評価(results/{名前}.json の video_eval)",
+ "minvis_cnxtb_dinov3_cls8_ep100_const": {"dev": [[25, 24.5], [50, 23.3]], "val": [[25, 23.69]]},
+ "minvis_vitb_dinov3_cls8_ep100_const": {"dev": [[25, 28.7], [50, 24.9]], "val": [[25, 23.70]]}
+}

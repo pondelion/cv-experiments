@@ -7,7 +7,7 @@ CV の基本タスク(セグメンテーション・物体検出・キーポイ�
 | [segmentation/](segmentation/) | セグメンテーションの実験(例: [segmentation/instance_segmentation/](segmentation/instance_segmentation/)) |
 | [object_detection/](object_detection/) | 物体検出の実験 |
 | [keypoint_detection/](keypoint_detection/) | キーポイント検出の実験 |
-| [mot/](mot/) | 複数物体の追跡の実験 |
+| [mot/](mot/) | 複数物体の追跡の実験(画像のモデル + 独立した追跡の手法の 2 段の構成) |
 | [ocr/](ocr/) | OCR の実験 |
 | [datasets/](datasets/) | データセット(評価のデータセット・合成データ)の置き場 |
 | [vendor/](vendor/) | 手で取ってくる他の人のコード・モデルのファイルの置き場 |

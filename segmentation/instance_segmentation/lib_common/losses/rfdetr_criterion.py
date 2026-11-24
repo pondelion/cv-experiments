@@ -129,7 +129,8 @@ def full_mask_cost(parts: dict, i: int, target: torch.Tensor, alpha: float = 0.2
         parts: マスクの材料 {"spatial": (B, C, mh, mw), "query": (B, M, C), "bias"}。
         i: 画像の番号。
         target: この画像の正解のマスクを予測の大きさに双線形で縮めたもの (T_i, mh, mw)(0〜1)。
-        alpha, gamma: focal の形の重み(D-FINE-seg の matcher と同じ 0.25・2)。
+        alpha: focal の形の正例の重み(D-FINE-seg の matcher と同じ 0.25)。
+        gamma: focal の形の指数(同じく 2)。
 
     Returns:
         (focal の形の費用 (M, T_i)(画素の数で割る), Dice の費用 (M, T_i))。

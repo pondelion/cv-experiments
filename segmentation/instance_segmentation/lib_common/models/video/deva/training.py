@@ -31,13 +31,30 @@ SKIP_VALUES, SKIP_FRACTIONS, VIPSEG_SKIP_DIV = (5, 10, 15, 5), (0.1, 0.3, 0.8), 
 
 
 def max_jump_at(progress: float) -> int:
-    """学習の進み(0〜1)での max_jump(公式の 5 → 10 → 15 → 5 を、VIPSeg のフレームの間隔で割ったもの。最小 1)。"""
+    """学習の進みに合わせた max_jump(公式の 5 → 10 → 15 → 5 を、VIPSeg のフレームの間隔で割ったもの。最小 1)。
+
+    Args:
+        progress: 学習の進み(0〜1)。
+
+    Returns:
+        max_jump。
+    """
     k = sum(progress >= f for f in SKIP_FRACTIONS)
     return max(1, SKIP_VALUES[k] // VIPSEG_SKIP_DIV)
 
 
 def sample_frames(length: int, max_jump: int, rng: np.random.Generator, num_frames: int = NUM_FRAMES) -> list[int]:
-    """公式の VOSDataset のフレームの選び方。動画が num_frames より短いときは全部 + 重ねて足す(公式は短い動画を使わない)。"""
+    """学習の区間のフレームを選ぶ(公式の VOSDataset。動画が num_frames より短いときは全部 + 重ねて足す。公式は短い動画を使わない)。
+
+    Args:
+        length: 動画のフレームの数。
+        max_jump: 選んだどれかのフレームから離れてよいフレームの数。
+        rng: 乱数。
+        num_frames: 選ぶ数。
+
+    Returns:
+        フレームの番号の並び(時刻の順か、確率 0.5 で逆順)。
+    """
     if length < num_frames:
         idx = sorted(list(range(length)) + rng.choice(length, num_frames - length).tolist())
         return idx[::-1] if rng.random() < 0.5 else idx
@@ -53,10 +70,17 @@ def sample_frames(length: int, max_jump: int, rng: np.random.Generator, num_fram
 
 
 def select_objects(masks: torch.Tensor, rng: np.random.Generator, max_obj: int = MAX_NUM_OBJ, empty_ok: bool = False):
-    """最初のフレームに写っている物体から最大 max_obj 個(公式の stage 3 は 3、stage 0 は 1)。Args: masks (N_all, T, S, S)。
+    """最初のフレームに写っている物体から最大 max_obj 個を無作為に選ぶ(公式の stage 3 は 3、stage 0 は 1)。
 
-    empty_ok: 公式の stage 0 は、変換で物体が最初のフレームから外れても選び直さず、物体の数 1(正解は全部背景)として学習する。
-    Returns: (クラスの地図 (T, S, S)(0 背景、1〜n), 最初のフレームの正解 (max_obj, S, S), selector (max_obj,), n) か
+    Args:
+        masks: 区間の正解のマスク (N_all, T, S, S)。
+        rng: 乱数。
+        max_obj: 選ぶ物体の数の上限。
+        empty_ok: 物体がいなくても返す(公式の stage 0 は、変換で物体が最初のフレームから外れても選び直さず、物体の数 1
+            (正解は全部背景)として学習する)。
+
+    Returns:
+        (クラスの地図 (T, S, S)(0 背景、1〜n), 最初のフレームの正解 (max_obj, S, S), selector (max_obj,), n) か
         None(物体なし。empty_ok のときは返さない)。
     """
     t, s = masks.shape[1], masks.shape[-1]
@@ -78,8 +102,18 @@ def select_objects(masks: torch.Tensor, rng: np.random.Generator, max_obj: int =
 
 def train_forward(net: DEVA, frames: torch.Tensor, first_gt: torch.Tensor, selector: torch.Tensor,
                   num_ref_frames: int = NUM_REF_FRAMES) -> dict:
-    """公式の do_pass の forward。Args: frames (B, T, 3, S, S)、first_gt (B, N, S, S)、selector (B, N)、
-    num_ref_frames: 読み出す記憶のフレームの数(公式の stage 3 は 3、stage 0 は 2)。"""
+    """学習の forward(公式の do_pass)。
+
+    Args:
+        net: DEVA の伝搬のネットワーク。
+        frames: (B, T, 3, S, S)。
+        first_gt: 最初のフレームの正解 (B, N, S, S)。
+        selector: 使う物体の印 (B, N)。
+        num_ref_frames: 読み出す記憶のフレームの数(公式の stage 3 は 3、stage 0 は 2)。
+
+    Returns:
+        フレームごとの {"masks_{t}", "logits_{t}", "aux_logits_{t}"}(t = 1〜T − 1)。
+    """
     b, t = frames.shape[:2]
     n = first_gt.shape[1]
     sel = selector[:, :, None, None]
@@ -113,6 +147,16 @@ def train_forward(net: DEVA, frames: torch.Tensor, first_gt: torch.Tensor, selec
 
 
 def _bootstrapped_ce(logits, target, it: int):
+    """難しい画素だけの交差エントロピー(公式の BootstrappedCE。START_WARM〜END_WARM で割合を 100% から TOP_P へ)。
+
+    Args:
+        logits: (1, n + 1, S, S)。
+        target: (1, S, S) のクラスの地図。
+        it: 今の step。
+
+    Returns:
+        損失。
+    """
     if it < START_WARM:
         return F.cross_entropy(logits, target)
     raw = F.cross_entropy(logits, target, reduction="none").flatten()
@@ -122,7 +166,17 @@ def _bootstrapped_ce(logits, target, it: int):
 
 
 def deva_loss(out: dict, cls_gt: torch.Tensor, num_objects: list[int], it: int) -> tuple[torch.Tensor, dict]:
-    """公式の LossComputer.compute。Args: cls_gt (B, T, S, S)、num_objects: 区間ごとの物体の数。"""
+    """学習の損失(公式の LossComputer.compute)。
+
+    Args:
+        out: train_forward の返り値。
+        cls_gt: クラスの地図 (B, T, S, S)。
+        num_objects: 区間ごとの物体の数。
+        it: 今の step(bootstrapped CE の割合に使う)。
+
+    Returns:
+        (損失の合計, 内訳 {"ce", "aux", "dice"})。
+    """
     b, t = cls_gt.shape[:2]
     total, parts = 0.0, {"ce": 0.0, "aux": 0.0, "dice": 0.0}
     for ti in range(1, t):

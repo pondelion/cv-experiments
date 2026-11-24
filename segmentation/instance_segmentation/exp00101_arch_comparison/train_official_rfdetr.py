@@ -94,6 +94,7 @@ def predict_set(model, set_name: str) -> list[dict]:
 
 
 def main() -> None:
+    """公式の RF-DETR-Seg を学習し、学習した重みを自前の評価のコードで評価して保存する。"""
     p = argparse.ArgumentParser()
     p.add_argument("--name", required=True)
     p.add_argument("--train-set", default="coco_train_cls8_2k")

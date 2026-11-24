@@ -128,6 +128,8 @@ def mha_forward_2d(self, query: torch.Tensor, key: torch.Tensor, value: torch.Te
         query: (1, M, C)。
         key: (1, N, C)。
         value: (1, N, C)。
+        *args: 元の forward の残りの引数(使わない。推論ではマスクなし)。
+        **kwargs: 同上。
 
     Returns:
         (出力 (1, M, C), None)(元の forward の need_weights=False のときと同じ形)。

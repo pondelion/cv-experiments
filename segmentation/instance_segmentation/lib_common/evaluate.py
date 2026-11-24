@@ -92,7 +92,14 @@ def save_metrics(path, metrics: dict) -> None:
         metrics: 評価の結果の辞書。
     """
     def _clean(x):
-        """辞書の中の NaN を None に変える(JSON は NaN を書けないため)。"""
+        """辞書の中の NaN を None に変える(JSON は NaN を書けないため)。
+
+        Args:
+            x: 値(辞書なら中の値も変える)。
+
+        Returns:
+            NaN を None にした値。
+        """
         if isinstance(x, dict):
             return {k: _clean(v) for k, v in x.items()}
         return None if isinstance(x, float) and np.isnan(x) else x

@@ -417,7 +417,8 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             "cosine"(warmup の後 cosine で 0 へ)/ "multistep"(0.067 倍からの warmup の後、MULTISTEP_FRACS の所で 1/10。
             detectron2)。
         lrf: schedule="linear" の最後の倍率 / "flatcosine" の最小の倍率。
-        flat_frac, tail_frac: schedule="flatcosine" の一定の所までの割合と、最後の最小のままの割合。
+        flat_frac: schedule="flatcosine" の一定の所までの割合。
+        tail_frac: schedule="flatcosine" の最後の最小のままの割合。
         backbone_warmup: 0 より大きいと 2 段の warmup(公式の EoMT の TwoStageWarmupPolySchedule。schedule は poly か constant)。
             param_groups の "backbone" が True の組は、最初の warmup 回は 0、次の backbone_warmup 回で上げ、その後 poly で 0 へ。
             ほかの組は warmup 回で上げ、その後 poly で 0 へ。
@@ -469,7 +470,14 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             更新の回数(0 始まり)から倍率を返す関数。
         """
         def f(step: int) -> float:
-            """更新の回数 step(0 始まり)の倍率。"""
+            """更新の回数ごとの、元の学習率に掛ける倍率。
+
+            Args:
+                step: 今までの更新の回数(0 始まり)。
+
+            Returns:
+                倍率。
+            """
             if step < start:
                 return 0.0
             if step < start + length:
@@ -666,6 +674,13 @@ def evaluate_quick(model: torch.nn.Module, cfg: TrainConfig, quick_set: str, epo
 def evaluate_video(model: torch.nn.Module, cfg: TrainConfig, set_name: str, epoch: int, log) -> dict:
     """画像のモデルに MinVIS の照合をかけ、動画のセットで動画の AP と画像 AP を測って記録する(動画のモデルと同じ評価)。
 
+    Args:
+        model: 画像のモデル。
+        cfg: 学習の設定(入力の大きさ・video_top_k などを使う)。
+        set_name: 動画のセットの名前。
+        epoch: 今のエポック(記録に書く)。
+        log: 記録を書くファイル。
+
     Returns:
         video_train.evaluate_video_set の結果(AP・image_AP など)+ {"set", "epoch"}。
     """
@@ -678,7 +693,11 @@ def evaluate_video(model: torch.nn.Module, cfg: TrainConfig, set_name: str, epoc
     # 画像のモデル(Mask2Former・GTR 系)は ImageSegmenter で同じ形の出力にそろえる
     seg = ImageSegmenter(model, cfg.arch, crop_to_box=cfg.arch == "gtr_seg" and cfg.gtr_mask_loss == "box_crop")
     tracker = MinVIS(seg, chunk=max(cfg.batch_size // cfg.grad_accum, 1))
-    m = evaluate_video_set(tracker, set_name, SimpleNamespace(size=cfg.size, top_k=cfg.video_top_k, workers=cfg.workers))
+    # 画像のセットと動画のセットではクラスの並びが違うことがある(vipseg_frames_cls8 は person, bicycle, car, …、vipseg_vis_cls8 は
+    # car, bicycle, person, …)ので、学習のデータのクラスの名前でカテゴリーの id に対応させる
+    class_names = [c["name"] for c in json.loads(Path(cfg.train_json).read_text())["categories"]]
+    m = evaluate_video_set(tracker, set_name, SimpleNamespace(size=cfg.size, top_k=cfg.video_top_k, workers=cfg.workers),
+                           class_names=class_names)
     torch.cuda.empty_cache()
     rec = {"set": set_name, "epoch": epoch, **m, "time": datetime.now().isoformat(timespec="seconds")}
     log.write(json.dumps({"video_eval": rec}) + "\n"), log.flush()
@@ -689,6 +708,12 @@ def evaluate_video(model: torch.nn.Module, cfg: TrainConfig, set_name: str, epoc
 
 def evaluate_test(model: torch.nn.Module, cfg: TrainConfig, epoch: int, log) -> dict:
     """学習の途中に、test の役のセット(cfg.test_sets)の全部の画像で mask・box の AP を測って記録する(重みの選択には使わない)。
+
+    Args:
+        model: 画像のモデル。
+        cfg: 学習の設定。
+        epoch: 今のエポック(記録に書く)。
+        log: 記録を書くファイル。
 
     Returns:
         {セット名: {"segm", "bbox", "per_class_segm_AP"}}。

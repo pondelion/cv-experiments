@@ -67,7 +67,8 @@ def _to_rle(seg, h: int, w: int) -> dict:
 
     Args:
         seg: COCO の注釈の segmentation(多角形・非圧縮の RLE・圧縮の RLE)。
-        h, w: 画像の縦・横の画素数。
+        h: 画像の縦の画素数。
+        w: 画像の横の画素数。
 
     Returns:
         圧縮の RLE。

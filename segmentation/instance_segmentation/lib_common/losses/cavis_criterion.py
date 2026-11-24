@@ -29,7 +29,16 @@ CTX_WEIGHT = CTX_AUX_WEIGHT = PROTO_WEIGHT = PROTO_AUX_WEIGHT = 2.0  # 公式の
 
 
 def contrastive_pair_loss(anchor: torch.Tensor, pos: torch.Tensor, neg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """1 組の損失(公式の loss_reid の 1 項)。Args: anchor (K, C)、pos (P, C)、neg (M, C)。Returns: (内積の損失, cos の損失)。"""
+    """1 組の損失(公式の loss_reid の 1 項)。
+
+    Args:
+        anchor: (K, C)。
+        pos: 正例 (P, C)。
+        neg: 負例 (M, C)。
+
+    Returns:
+        (内積の損失(anchor について和), cos の損失(平均))。
+    """
     dp, dn = anchor @ pos.T, anchor @ neg.T  # (K, P), (K, M)
     x = (dn[:, None, :] - dp[:, :, None]).flatten(1)  # (K, P·M) 全部の (正例, 負例) の組の 負例 − 正例
     contras = torch.logsumexp(F.pad(x, (0, 1)), dim=1).sum()  # anchor ごとの log(1 + Σ exp(負例 − 正例)) の和
@@ -39,7 +48,15 @@ def contrastive_pair_loss(anchor: torch.Tensor, pos: torch.Tensor, neg: torch.Te
 
 
 def grouped_loss(groups: list[torch.Tensor], zero: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """物体ごとの埋め込みの集まり [(n_i, C)] から、anchor = 正例 = 自分、負例 = ほかの物体の全部で損失を平均する(組がなければ 0)。"""
+    """物体ごとの埋め込みの集まりから、anchor = 正例 = 自分、負例 = ほかの物体の全部として損失を平均する。
+
+    Args:
+        groups: 物体ごとの埋め込み [(n_i, C)]。
+        zero: 組がないときに返す 0(グラフにつながったもの)。
+
+    Returns:
+        (内積の損失の平均, cos の損失の平均)(組がなければどちらも zero)。
+    """
     items = []
     for i, g in enumerate(groups):
         others = [h for j, h in enumerate(groups) if j != i]
@@ -63,7 +80,9 @@ class CAVISSegCriterion(Mask2FormerCriterion):
         self.num_frames = num_frames
 
     def forward(self, outs: list[dict], targets: list[dict], match_outs=None) -> tuple[torch.Tensor, dict]:
-        """Args:
+        """区間ごとの損失(画像の損失 + 文脈の対照学習 + 原型の対照学習)。
+
+        Args:
             outs: Mask2Former の層ごとの予測(画像は (b t) の順に B·T 枚)。最後の要素に "reid" (B·T, Q, C)・"mask_feat"。
             targets: 区間ごとの {"labels": (N,), "masks": (N, T, S, S)}(長さ B)。
             match_outs: 使わない(ほかの動画の損失と呼び方をそろえるため)。

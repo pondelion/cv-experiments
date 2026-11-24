@@ -107,21 +107,52 @@ class DINOv3Config:
 
 
 def cosine_schedule(base: float, final: float, total: int, warmup: int = 0, start_warmup: float = 0.0) -> np.ndarray:
-    """線形の warmup(start_warmup → base)の後、コサインで final へ下げる(公式の CosineScheduler)。Returns: (total,)。"""
+    """線形の warmup(start_warmup → base)の後、コサインで final へ下げる(公式の CosineScheduler)。
+
+    Args:
+        base: warmup の後の値。
+        final: 最後の値。
+        total: 全部の step の数。
+        warmup: warmup の step の数。
+        start_warmup: warmup の始めの値。
+
+    Returns:
+        step ごとの値 (total,)。
+    """
     w = np.linspace(start_warmup, base, warmup)
     it = np.arange(total - warmup)
     return np.concatenate([w, final + 0.5 * (base - final) * (1 + np.cos(np.pi * it / max(len(it), 1)))])
 
 
 def warmup_cosine(start: float, peak: float, end: float, warmup: int, total: int) -> np.ndarray:
-    """start → peak の線形の warmup の後、コサインで end へ(公式の linear_warmup_cosine_decay。損失の重みの変化に使う)。"""
+    """start → peak の線形の warmup の後、コサインで end へ(公式の linear_warmup_cosine_decay。損失の重みの変化に使う)。
+
+    Args:
+        start: 始めの値。
+        peak: warmup の後の値。
+        end: 最後の値。
+        warmup: warmup の step の数。
+        total: 全部の step の数。
+
+    Returns:
+        step ごとの値 (total,)。
+    """
     w = np.linspace(start, peak, warmup, endpoint=False)
     it = np.arange(total - warmup)
     return np.concatenate([w, end + 0.5 * (peak - end) * (1 + np.cos(np.pi * it / max(len(it), 1)))])
 
 
 def param_groups(model: nn.Module, cfg: DINOv3Config, is_backbone: bool) -> list[dict]:
-    """1 つの部品(backbone か head)のパラメータを、学習率・weight decay の倍率ごとの組に分ける(公式の param_groups.py)。"""
+    """1 つの部品(backbone か head)のパラメータを、学習率・weight decay の倍率ごとの組に分ける(公式の param_groups.py)。
+
+    Args:
+        model: 部品。
+        cfg: DINOv3Config(層ごとの学習率の減衰などを使う)。
+        is_backbone: backbone なら True(層ごとの学習率の減衰をかける)。
+
+    Returns:
+        optimizer の組の並び(各組に lr_multiplier・wd_multiplier などを持つ)。
+    """
     n_blocks = len(model.vit.blocks) if is_backbone else 0
     groups = {}
     for name, p in model.named_parameters():
@@ -182,6 +213,14 @@ class DINOv3SSL(nn.Module):
         self.gram_updates = 0
 
     def train(self, mode: bool = True):
+        """学習の状態を切り替える(先生・Gram の先生は常に推論の形。drop path なし)。
+
+        Args:
+            mode: True で学習の状態。
+
+        Returns:
+            self。
+        """
         super().train(mode)
         self.teacher.eval()  # 先生は常に推論の形(drop path なし)
         if self.gram_teacher is not None:
@@ -190,7 +229,11 @@ class DINOv3SSL(nn.Module):
 
     @torch.no_grad()
     def update_ema(self, momentum: float) -> None:
-        """学生の EMA ← momentum × EMA + (1 − momentum) × 学生(自己蒸留では EMA が先生そのもの)。"""
+        """学生の EMA を更新する(EMA ← momentum × EMA + (1 − momentum) × 学生。自己蒸留では EMA が先生そのもの)。
+
+        Args:
+            momentum: EMA の係数。
+        """
         s, t = list(self.student.parameters()), list(self.ema.parameters())
         torch._foreach_mul_(t, momentum)
         torch._foreach_add_(t, s, alpha=1 - momentum)
@@ -202,13 +245,22 @@ class DINOv3SSL(nn.Module):
         self.gram_ready = True
 
     def gram_before_step(self, step: int) -> None:
-        """optimizer step の前: gram_it_load_ema_teacher の step で、EMA の先生を Gram の先生に写す(公式と同じ時期)。"""
+        """optimizer step の前: gram_it_load_ema_teacher の step で、EMA の先生を Gram の先生に写す(公式と同じ時期)。
+
+        Args:
+            step: 今の step。
+        """
         if self.gram_teacher is not None and step == self.cfg.gram_it_load_ema_teacher:
             self.load_gram_teacher()
 
     def gram_after_step(self, step: int) -> None:
-        """optimizer step と EMA の更新の後: gram_it_first_update から gram_update_frequency ごとに、Gram の先生を写し直す
-        (公式は (step + 1) で判定。最大 gram_max_updates 回)。"""
+        """optimizer step と EMA の更新の後: gram_it_first_update から gram_update_frequency ごとに、Gram の先生を写し直す。
+
+        公式と同じく (step + 1) で判定し、最大 gram_max_updates 回。
+
+        Args:
+            step: 今の step。
+        """
         c = self.cfg
         if (self.gram_teacher is not None and c.gram_update_frequency > 0 and step + 1 >= c.gram_it_first_update
                 and (step + 1) % c.gram_update_frequency == 0
@@ -263,7 +315,18 @@ class DINOv3SSL(nn.Module):
         return total, {k: float(v.detach()) for k, v in parts.items()}
 
     def _gram(self, batch: dict, s_patch: torch.Tensor, t_patch: torch.Tensor, masks: torch.Tensor, size: int) -> torch.Tensor:
-        """Gram の損失(学生のパッチの特徴と、Gram の先生のパッチの特徴の似かたの表の二乗誤差)。"""
+        """Gram の損失(学生のパッチの特徴と、Gram の先生のパッチの特徴の似かたの表の二乗誤差)。
+
+        Args:
+            batch: まとめ(Gram の先生に入れる切り抜き "gram_teacher_crops"(なければ "global_crops_teacher")を持つ)。
+            s_patch: 学生のパッチの特徴 (B, N, C)。
+            t_patch: EMA の先生のパッチの特徴(gram_ema_teacher のとき目標に使う)。
+            masks: 隠したパッチの印 (B, N)(gram_tokens_used で使うパッチを選ぶ)。
+            size: 学生の切り抜きの一辺(先生の格子を学生の格子に縮めるのに使う)。
+
+        Returns:
+            損失(Gram の先生の準備の前は 0)。
+        """
         c = self.cfg
         if c.gram_ema_teacher:
             target = t_patch
@@ -297,9 +360,22 @@ class ImageListDataset(Dataset):
         self.paths, self.aug = list(paths), MultiCropAugmentation(crops)
 
     def __len__(self) -> int:
+        """画像の数を返す。
+
+        Returns:
+            画像の数。
+        """
         return len(self.paths)
 
     def __getitem__(self, i: int) -> dict:
+        """i 番目の画像を読み、データ拡張をかける。
+
+        Args:
+            i: 画像の番号。
+
+        Returns:
+            MultiCropAugmentation の出力(大域と局所の切り抜きなど)。
+        """
         from PIL import Image
         return self.aug(Image.open(self.paths[i]).convert("RGB"))
 

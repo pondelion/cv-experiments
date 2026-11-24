@@ -41,7 +41,15 @@ SAMPLES = common.RESULTS_DIR / "samples" / "q2b_fill"
 
 
 def check_same_as_q2(k: int, gts: list) -> None:
-    """作り直した場面の正解が、保存済みの q2 の正解(paste.json)と画素単位で同じかを確かめる。"""
+    """作り直した場面の正解が、保存済みの q2 の正解(paste.json)と画素単位で同じかを確かめる。
+
+    Args:
+        k: 場面の番号。
+        gts: 作り直した場面の正解 [(クラス名, マスク)]。
+
+    Raises:
+        AssertionError: 物体の数かクラスかマスクが q2 と違うとき。
+    """
     coco = check_same_as_q2.coco
     anns = [a for a in coco["annotations"] if a["image_id"] == k + 1]
     names = {c["id"]: c["name"] for c in coco["categories"]}
@@ -51,6 +59,7 @@ def check_same_as_q2(k: int, gts: list) -> None:
 
 
 def main() -> None:
+    """q2 と同じ場面を作り直し、背景の作り方を足して保存する(正解が q2 と同じかも確かめる)。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=40)
     parser.add_argument("--samples", type=int, default=12)

@@ -1,0 +1,242 @@
+{
+ "sort_th0": {
+  "config": {
+   "det_thresh": 0.0,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 14.595037924372125,
+    "DetA": 32.12355146383819,
+    "AssA": 6.95977870257662,
+    "LocA": 80.5082685903867,
+    "MOTA": -29.91630018442332,
+    "IDSW": 4901.0,
+    "IDF1": 10.155792256959572
+   }
+  }
+ },
+ "sort_th0.15": {
+  "config": {
+   "det_thresh": 0.15,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.525337763909064,
+    "DetA": 58.02699845018117,
+    "AssA": 16.322095255192163,
+    "LocA": 81.3684956698807,
+    "MOTA": 67.0194353809051,
+    "IDSW": 1415.0,
+    "IDF1": 28.37051152710832
+   }
+  }
+ },
+ "sort_th0.2": {
+  "config": {
+   "det_thresh": 0.2,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 31.168860356118692,
+    "DetA": 58.98276898676564,
+    "AssA": 16.719277194219483,
+    "LocA": 81.44306185257048,
+    "MOTA": 69.58150092211662,
+    "IDSW": 1246.0,
+    "IDF1": 29.197312749275866
+   }
+  }
+ },
+ "sort_th0.3": {
+  "config": {
+   "det_thresh": 0.3,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.6961343751876,
+    "DetA": 59.10726008188514,
+    "AssA": 16.178706062453102,
+    "LocA": 81.50232783283869,
+    "MOTA": 70.95332671300893,
+    "IDSW": 1138.0,
+    "IDF1": 29.114497370744253
+   }
+  }
+ },
+ "sort_th0.4": {
+  "config": {
+   "det_thresh": 0.4,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.49148818390804,
+    "DetA": 58.9152007756692,
+    "AssA": 16.014763156710618,
+    "LocA": 81.7268601507249,
+    "MOTA": 71.15051780394383,
+    "IDSW": 1128.0,
+    "IDF1": 29.52216840536513
+   }
+  }
+ },
+ "sort_th0.5": {
+  "config": {
+   "det_thresh": 0.5,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.027517547464093,
+    "DetA": 58.28613076796451,
+    "AssA": 15.670886536726192,
+    "LocA": 81.93772839777495,
+    "MOTA": 70.81288125975315,
+    "IDSW": 1095.0,
+    "IDF1": 29.74761549633002
+   }
+  }
+ },
+ "sort_th0.6": {
+  "config": {
+   "det_thresh": 0.6,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 28.76581131052992,
+    "DetA": 57.05514648250482,
+    "AssA": 14.690302599176382,
+    "LocA": 82.33027637306924,
+    "MOTA": 69.87515959710598,
+    "IDSW": 1069.0,
+    "IDF1": 28.4807190953729
+   }
+  }
+ },
+ "sort_th0.7": {
+  "config": {
+   "det_thresh": 0.7,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 26.493283158576503,
+    "DetA": 53.597352148608394,
+    "AssA": 13.254531799529367,
+    "LocA": 82.87534118510078,
+    "MOTA": 65.48872180451127,
+    "IDSW": 1084.0,
+    "IDF1": 26.72344381635414
+   }
+  }
+ },
+ "sort_th0.8": {
+  "config": {
+   "det_thresh": 0.8,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 19.29030807930815,
+    "DetA": 40.18221448150116,
+    "AssA": 9.39517897982628,
+    "LocA": 84.49745531588624,
+    "MOTA": 46.73570719250957,
+    "IDSW": 1315.0,
+    "IDF1": 19.17095996596871
+   }
+  }
+ },
+ "sort_th0.85": {
+  "config": {
+   "det_thresh": 0.85,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 13.192993773456058,
+    "DetA": 21.735783869282535,
+    "AssA": 8.0888430781616,
+    "LocA": 86.72537299981104,
+    "MOTA": 23.589161583203293,
+    "IDSW": 1147.0,
+    "IDF1": 11.950048030739675
+   }
+  }
+ },
+ "sort_th0.9": {
+  "config": {
+   "det_thresh": 0.9,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 6.052871950140718,
+    "DetA": 4.7233026469085315,
+    "AssA": 7.772373307510221,
+    "LocA": 90.02128548324721,
+    "MOTA": 4.9680805788055045,
+    "IDSW": 156.0,
+    "IDF1": 3.3149916383449316
+   }
+  }
+ },
+ "sort_th0.95": {
+  "config": {
+   "det_thresh": 0.95,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 0.0,
+    "DetA": 0.0,
+    "AssA": 0.0,
+    "LocA": 100.0,
+    "MOTA": 0.0,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ }
+}

@@ -53,7 +53,11 @@ class Qwen3VLVisionViT(nn.Module):
         self.pretrained_cfg = {"mean": (0.5, 0.5, 0.5), "std": (0.5, 0.5, 0.5)}  # 公式の前処理の正規化
 
     def set_grad_checkpointing(self, enable: bool = True) -> None:
-        """vision encoder の層で gradient checkpointing を使う。"""
+        """vision encoder の層で gradient checkpointing を使う。
+
+        Args:
+            enable: 使うか。
+        """
         if enable:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         else:
@@ -61,10 +65,14 @@ class Qwen3VLVisionViT(nn.Module):
 
     def forward_intermediates(self, x: torch.Tensor, indices: list[int], norm: bool = False, output_fmt: str = "NCHW",
                               intermediates_only: bool = True) -> list[torch.Tensor]:
-        """Args:
+        """途中の層の出力を取り出す(timm の forward_intermediates と同じ呼び方)。
+
+        Args:
             x: (B, 3, H, W)(H・W は 32 の倍数)。
             indices: 取り出す層の番号(0 始まり)。
             norm: 使わない(Qwen3-VL の vision encoder は最後の LayerNorm を持たない。ViTAdapter には norm=False で渡す)。
+            output_fmt: 使わない("NCHW" で返す。timm と呼び方をそろえるため)。
+            intermediates_only: 使わない(途中の層だけを返す。同上)。
 
         Returns:
             各層の (B, D, h, w)。

@@ -47,7 +47,16 @@ TILE = 120
 
 
 def diversity(arrs: list[np.ndarray], masks: list[np.ndarray]) -> dict:
-    """物体の画像とマスクの組から、多様さの値を計算する。"""
+    """物体の画像とマスクの組から、多様さの値を計算する。
+
+    Args:
+        arrs: 物体の画像 (H, W, 3) の並び。
+        masks: 同じ順のマスク (H, W) の並び。
+
+    Returns:
+        {"aspect_std": 縦横比の log の標準偏差, "area_cv": 面積の変動係数, "shape_iou": 形どうしの IoU の平均,
+         "color_dist": 色(Lab の平均)どうしの距離の平均}。
+    """
     aspects, areas, sils, colors = [], [], [], []
     for a, m in zip(arrs, masks):
         ys, xs = np.nonzero(m)
@@ -66,6 +75,7 @@ def diversity(arrs: list[np.ndarray], masks: list[np.ndarray]) -> dict:
 
 
 def main() -> None:
+    """説明文の作り方ごとに物体を生成し、多様さの値を比べて保存する。"""
     q_dir = common.RUNS_DIR / "q1c"
     q_dir.mkdir(parents=True, exist_ok=True)
     llm_desc = {}

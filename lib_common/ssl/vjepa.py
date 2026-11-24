@@ -117,7 +117,11 @@ class VJEPAConfig:
 
 
 class ClipCrop:
-    """区間(か画像)のすべてのフレームを、同じ位置で切り抜き・反転して正規化する(公式の VideoTransform、auto augment なし)。"""
+    """区間(か画像)のすべてのフレームを、同じ位置で切り抜き・反転して正規化する(公式の VideoTransform、auto augment なし)。
+
+    Args:
+        cfg: VJEPAConfig(切り抜きの大きさ・面積と縦横比の範囲を使う)。
+    """
 
     def __init__(self, cfg: VJEPAConfig):
         self.t = v2.Compose([v2.RandomResizedCrop(cfg.crop_size, scale=cfg.crop_scale, ratio=cfg.crop_ratio, antialias=True),
@@ -125,7 +129,14 @@ class ClipCrop:
                              v2.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
     def __call__(self, frames: np.ndarray) -> torch.Tensor:
-        """(T, H, W, 3) の uint8 → (3, T, S, S)。"""
+        """全部のフレームに同じ変換をかける。
+
+        Args:
+            frames: (T, H, W, 3) の uint8。
+
+        Returns:
+            (3, T, S, S) の正規化した float。
+        """
         return rearrange(self.t(torch.from_numpy(rearrange(frames, "t h w c -> t c h w"))), "t c h w -> c t h w")
 
 
@@ -142,9 +153,25 @@ class VideoClips(Dataset):
         self.paths, self.cfg, self.as_image, self.crop = list(paths), cfg, as_image, ClipCrop(cfg)
 
     def __len__(self) -> int:
+        """動画の数を返す。
+
+        Returns:
+            動画の数。
+        """
         return len(self.paths)
 
     def __getitem__(self, i: int) -> torch.Tensor:
+        """i 番目の動画から区間(か 1 枚)を読み、変換をかける(読めない動画は、別の無作為な動画で 5 回まで代える)。
+
+        Args:
+            i: 動画の番号。
+
+        Returns:
+            区間 (3, T, S, S)、または画像 (3, S, S)。
+
+        Raises:
+            RuntimeError: 5 回続けて読めなかったとき。
+        """
         rng = random.Random()
         n = 1 if self.as_image else self.cfg.num_frames
         for _ in range(5):  # 読めない動画は別の動画で代える
@@ -163,6 +190,7 @@ def sample_masks(spec: MaskSpec, grid: tuple[int, int, int], batch: int, gen: to
         spec: 隠し方。
         grid: パッチの格子 (t, h, w)。
         batch: まとめの数 B。
+        gen: 乱数の生成器。
 
     Returns:
         (見せる場所の番号 (B, N_見せる), 隠す場所の番号 (B, N_隠す))。番号は t·h·w の格子を平らにした順。要素ごとに数が違うので、
@@ -188,7 +216,13 @@ def sample_masks(spec: MaskSpec, grid: tuple[int, int, int], batch: int, gen: to
 def context_weights(enc: torch.Tensor, pred: torch.Tensor, grid: tuple[int, int, int]) -> torch.Tensor:
     """見せた場所のパッチごとの重み = 1 / sqrt(最も近い隠した場所までの格子の距離)(公式の compute_mask_distance)。
 
-    Args: enc: (B, Ne)。pred: (B, Np)。Returns: (B, Ne)。
+    Args:
+        enc: 見せた場所の番号 (B, Ne)。
+        pred: 隠した場所の番号 (B, Np)。
+        grid: パッチの格子 (t, h, w)。
+
+    Returns:
+        (B, Ne)。
     """
     _, h, w = grid
     pos = lambda i: torch.stack([i // (h * w), i % (h * w) // w, i % w], dim=-1).float()  # (B, n, 3) の (時間, 縦, 横)
@@ -227,7 +261,9 @@ class VJEPAEncoder(nn.Module):
         self.has_rope = getattr(v, "rope", None) is not None
 
     def forward(self, x: torch.Tensor, keep: torch.Tensor | None = None) -> torch.Tensor:
-        """Args:
+        """見せるパッチだけを ViT に通し、目標の層の出力をつなげる。
+
+        Args:
             x: 画像 (B, 3, H, W) か動画 (B, 3, T, H, W)。
             keep: 通すパッチの番号 (B, N_見せる)(None なら全部)。
 
@@ -272,7 +308,11 @@ class VJEPAEncoder(nn.Module):
         return torch.cat(outs, dim=-1)
 
     def export_vit(self) -> dict:
-        """後の学習で使う timm の ViT の state_dict(最後の LayerNorm は、最後の目標の層の LayerNorm に置き換える。公式と同じ)。"""
+        """後の学習で使う timm の ViT の重みを出す。
+
+        Returns:
+            timm の ViT の state_dict(最後の LayerNorm は、最後の目標の層の LayerNorm に置き換える。公式と同じ)。
+        """
         sd = self.vit.state_dict()
         for k, val in self.norms[-1].state_dict().items():
             sd[f"norm.{k}"] = val
@@ -280,8 +320,26 @@ class VJEPAEncoder(nn.Module):
 
 
 def sincos_3d(grid: tuple[int, int, int], dim: int, device) -> torch.Tensor:
-    """3 次元の固定の sin・cos の位置の埋め込み (t·h·w, dim)(時間に dim/4、縦・横に 3·dim/8 ずつ)。"""
+    """3 次元の固定の sin・cos の位置の埋め込み(時間に dim/4、縦・横に 3·dim/8 ずつ)。
+
+    Args:
+        grid: パッチの格子 (t, h, w)。
+        dim: 埋め込みの次元。
+        device: 作る device。
+
+    Returns:
+        (t·h·w, dim)。
+    """
     def one(n: int, d: int) -> torch.Tensor:
+        """1 つの軸の sin・cos の埋め込み。
+
+        Args:
+            n: 軸の長さ。
+            d: 次元。
+
+        Returns:
+            (n, d)。
+        """
         omega = 1.0 / 10000 ** (torch.arange(d // 2, device=device, dtype=torch.float32) / (d // 2))
         a = torch.arange(n, device=device, dtype=torch.float32)[:, None] * omega
         return torch.cat([a.sin(), a.cos()], dim=1)  # (n, d)
@@ -321,6 +379,11 @@ class VJEPAPredictor(nn.Module):
 
     @staticmethod
     def _init(m: nn.Module) -> None:
+        """公式と同じ初期化(Linear は切断した正規分布 0.02・bias 0、LayerNorm は 1・0)。
+
+        Args:
+            m: 初期化する層。
+        """
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
@@ -329,7 +392,14 @@ class VJEPAPredictor(nn.Module):
             nn.init.ones_(m.weight); nn.init.zeros_(m.bias)
 
     def forward(self, z: torch.Tensor, enc: torch.Tensor, pred: torch.Tensor, grid: tuple[int, int, int], mod: str):
-        """Args: z: 学生の出力 (B, Ne, L·C)。enc・pred: 見せた・隠した場所の番号 (B, Ne)・(B, Np)。
+        """隠した場所と見せた場所の先生の目標を予測する。
+
+        Args:
+            z: 学生の出力 (B, Ne, L·C)。
+            enc: 見せた場所の番号 (B, Ne)。
+            pred: 隠した場所の番号 (B, Np)。
+            grid: パッチの格子 (t, h, w)。
+            mod: "image" か "video"(種類の埋め込みを選ぶ)。
 
         Returns:
             (隠した場所の予測 (B, Np, L·C), 見せた場所の予測 (B, Ne, L·C))。
@@ -363,13 +433,26 @@ class VJEPA(nn.Module):
 
     @torch.no_grad()
     def update_ema(self, momentum: float) -> None:
-        """先生 ← momentum × 先生 + (1 − momentum) × 学生。"""
+        """先生を学生の EMA で更新する(先生 ← momentum × 先生 + (1 − momentum) × 学生)。
+
+        Args:
+            momentum: EMA の係数。
+        """
         s, t = list(self.encoder.parameters()), list(self.target.parameters())
         torch._foreach_mul_(t, momentum)
         torch._foreach_add_(t, s, alpha=1 - momentum)
 
     def branch_loss(self, x: torch.Tensor, specs: list[MaskSpec], lam: float) -> tuple[torch.Tensor, dict]:
-        """画像か動画の 1 つのまとめの損失(隠し方の通りで平均)。"""
+        """画像か動画の 1 つのまとめの損失(隠し方の通りで平均)。
+
+        Args:
+            x: 画像 (B, 3, S, S) か動画 (B, 3, T, S, S)。
+            specs: 隠し方の並び。
+            lam: 見せた場所の予測の損失の重み。
+
+        Returns:
+            (損失, 内訳)。
+        """
         c = self.cfg
         p = self.encoder.vit.patch_embed.patch_size[0]
         grid = (1 if x.dim() == 4 else x.shape[2] // c.tubelet_size, x.shape[-2] // p, x.shape[-1] // p)
@@ -398,6 +481,16 @@ class VJEPA(nn.Module):
         return torch.stack(losses).mean(), {f"{mod}_pred": pred_l, f"{mod}_context": ctx_l}
 
     def forward(self, video: torch.Tensor, image: torch.Tensor | None, step: int) -> tuple[torch.Tensor, dict]:
+        """1 step の損失(動画と画像の損失の平均。見せた場所の損失の重みは step に合わせて 0 から上げる)。
+
+        Args:
+            video: 動画 (B, 3, T, S, S)。
+            image: 画像 (B, 3, S, S) か None。
+            step: 今の step。
+
+        Returns:
+            (損失, 内訳)。
+        """
         c = self.cfg
         ramp = min(max((step - c.lambda_start_step) / max(c.lambda_end_step - c.lambda_start_step, 1), 0.0), 1.0)
         loss, parts = self.branch_loss(video, c.video_masks, c.lambda_video * ramp)
@@ -412,6 +505,14 @@ class VJEPA(nn.Module):
 
 
 def _loop(loader: DataLoader):
+    """DataLoader をくり返し回す。
+
+    Args:
+        loader: DataLoader。
+
+    Yields:
+        loader の要素(終わりなく)。
+    """
     while True:
         yield from loader
 
@@ -424,6 +525,9 @@ def train_vjepa(cfg: VJEPAConfig, video_set: Dataset, image_set: Dataset | None 
         video_set: 動画の区間 (3, T, S, S) を返す Dataset。
         image_set: 画像 (3, S, S) を返す Dataset(cfg.use_images のとき)。
         max_steps: 途中で止める step(確かめるとき。学習率などの変化は total_steps で作る)。
+
+    Returns:
+        保存した先生の重みのパス。
     """
     torch.manual_seed(cfg.seed); np.random.seed(cfg.seed); random.seed(cfg.seed)
     if cfg.max_vram_gb:

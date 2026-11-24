@@ -31,6 +31,7 @@ from segmentation.instance_segmentation.lib_common.train import (EOMT_RECIPE, GT
 
 
 def main() -> None:
+    """引数で TrainConfig の項目を上書きして学習する。"""
     p = argparse.ArgumentParser()
     p.add_argument("--name", required=True)
     p.add_argument("--arch", default="mask2former", choices=["mask2former", "rfdetr_seg", "yolo_seg", "gtr_seg", "eomt", "pmt",

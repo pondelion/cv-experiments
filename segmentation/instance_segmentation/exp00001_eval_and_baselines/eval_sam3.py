@@ -35,6 +35,7 @@ from lib_common.synthetic_data.sam3_labeler import CKPT_REPO, predict_classes  #
 
 
 def main() -> None:
+    """SAM 3 にクラス名を与えて評価のセットで評価し、結果を保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--set", default="coco_val_dev")
     parser.add_argument("--limit", type=int, default=None, help="先頭の何枚だけ使うか(動作確認用)")

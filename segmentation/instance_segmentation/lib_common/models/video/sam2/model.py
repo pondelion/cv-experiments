@@ -31,7 +31,14 @@ NO_OBJ_SCORE = -1024.0  # 物体がないときのマスクの値(公式と同�
 
 
 class ImageEncoder(nn.Module):
-    """画像の encoder(exp の backbone + 公式の FpnNeck。scalp 1 で最も粗い段を捨てる)。"""
+    """画像の encoder(exp の backbone + 公式の FpnNeck。scalp 1 で最も粗い段を捨てる)。
+
+    Args:
+        backbone: timm のモデルの名前(stride 4・8・16・32 の 4 段を作る)。
+        image_size: 入力の一辺。
+        pretrained: 事前学習の重みを読むか。
+        dim: FPN の出力のチャンネル(公式は 256)。
+    """
 
     def __init__(self, backbone: str, image_size: int, pretrained: bool = True, dim: int = 256):
         super().__init__()
@@ -42,7 +49,14 @@ class ImageEncoder(nn.Module):
         self.pos = PositionEmbeddingSine(dim)
 
     def forward(self, x: torch.Tensor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Returns: ([stride 4, 8, 16 の特徴 (B, C, ·, ·)], [同じ段の位置の埋め込み])。"""
+        """backbone の 4 段を FPN で混ぜ(上から足すのは stride 16・32 の段だけ。公式の fpn_top_down_levels)、最も粗い段を捨てる。
+
+        Args:
+            x: (B, 3, S, S)。
+
+        Returns:
+            ([stride 4, 8, 16 の特徴 (B, C, ·, ·)], [同じ段の位置の埋め込み])。
+        """
         xs = self.trunk(x)
         out, prev = [None] * len(xs), None
         for i in range(len(xs) - 1, -1, -1):
@@ -59,7 +73,12 @@ class ImageEncoder(nn.Module):
 def fill_holes(mask: torch.Tensor, max_area: int = 8) -> torch.Tensor:
     """マスクの値の小さな穴(値 ≤ 0 の連結成分のうち面積 max_area 以下)を 0.1 で埋める(公式の fill_holes_in_mask_scores。推論だけ)。
 
-    Args: mask (B, 1, h, w)。
+    Args:
+        mask: マスクの値 (B, 1, h, w)。
+        max_area: 埋める穴の面積の上限(画素)。
+
+    Returns:
+        穴を埋めたマスクの値 (B, 1, h, w)。
     """
     import cv2
     out = mask.clone()
@@ -114,7 +133,14 @@ class SAM2(nn.Module):
 
     # ---- 画像 ----
     def forward_image(self, frames: torch.Tensor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Returns: ([stride 4(conv_s0 の後), 8(conv_s1 の後), 16], [位置の埋め込み])。"""
+        """画像の特徴を作る(高解像度の 2 段は、マスクの decoder の conv_s0・conv_s1 を先にかける。公式と同じ)。
+
+        Args:
+            frames: (B, 3, S, S)。
+
+        Returns:
+            ([stride 4(conv_s0 の後), 8(conv_s1 の後), 16 の特徴], [位置の埋め込み])。
+        """
         fpn, pos = self.image_encoder(frames)
         fpn[0] = self.sam_mask_decoder.conv_s0(fpn[0])
         fpn[1] = self.sam_mask_decoder.conv_s1(fpn[1])
@@ -122,9 +148,19 @@ class SAM2(nn.Module):
 
     # ---- SAM の head ----
     def _sam_heads(self, feat, points=None, masks=None, high_res=None, multimask=False):
-        """公式の _forward_sam_heads。Args: feat (B, C, H, W)、points {"point_coords" (B, P, 2), "point_labels" (B, P)} か None、
-        masks (B, 1, ·, ·) か None。Returns: (低解像度の複数マスク, 高解像度の複数マスク, IoU, 低解像度の最良のマスク,
-        高解像度の最良のマスク, 物体のポインタ (B, C), 物体らしさの値 (B, 1))。"""
+        """プロンプトとマスクの decoder でマスクを出す(公式の _forward_sam_heads)。
+
+        Args:
+            feat: 記憶で直した画像の特徴 (B, C, H, W)(stride 16)。
+            points: {"point_coords": (B, P, 2), "point_labels": (B, P)} か None(点なし)。
+            masks: マスクのプロンプト (B, 1, ·, ·) か None。
+            high_res: 高解像度の 2 段の特徴 [stride 4, stride 8]。
+            multimask: 複数のマスクを出して IoU の最良を選ぶか。
+
+        Returns:
+            (低解像度の複数マスク, 高解像度の複数マスク, IoU, 低解像度の最良のマスク, 高解像度の最良のマスク,
+             物体のポインタ (B, C), 物体らしさの値 (B, 1))。
+        """
         b, dev = feat.shape[0], feat.device
         if points is not None:
             pts = (points["point_coords"], points["point_labels"])
@@ -157,8 +193,18 @@ class SAM2(nn.Module):
         return low_multi, high_multi, ious, low, high, ptr, obj
 
     def _mask_as_output(self, feat, high_res, mask_inputs):
-        """与えたマスクを、SAM を通さずにそのまま出力にする(公式の use_mask_input_as_output_without_sam)。物体のポインタは、
-        マスクを 1/4 に縮めたものをプロンプトにして SAM の head から作る。"""
+        """与えたマスクを、SAM を通さずにそのまま出力にする(公式の use_mask_input_as_output_without_sam)。
+
+        物体のポインタは、マスクを 1/4 に縮めたものをプロンプトにして SAM の head から作る。
+
+        Args:
+            feat: 画像の特徴 (B, C, H, W)(stride 16)。
+            high_res: 高解像度の 2 段の特徴。
+            mask_inputs: 与えたマスク (B, 1, S, S)。
+
+        Returns:
+            _sam_heads と同じ 7 つ組(マスクは与えたマスクを ±10 にしたもの、IoU は 1)。
+        """
         mf = mask_inputs.float()
         high = mf * 20.0 - 10.0
         low = F.interpolate(high, size=(high.shape[-2] // 4, high.shape[-1] // 4), mode="bilinear", align_corners=False,
@@ -174,8 +220,16 @@ class SAM2(nn.Module):
     def _memory_conditioned(self, t: int, is_init_cond: bool, feat, pos, out_dict: dict, num_frames: int):
         """今のフレームの画像の特徴を記憶で直す(公式の _prepare_memory_conditioned_features。時刻は順方向だけ)。
 
-        Args: feat・pos (B, C, H, W)(stride 16)。out_dict {"cond": {t: 出力}, "non_cond": {t: 出力}}。
-        Returns: (B, C, H, W)。
+        Args:
+            t: 今の時刻。
+            is_init_cond: 最初の条件のフレームか(記憶がないので no_mem_embed を足すだけ)。
+            feat: 画像の特徴 (B, C, H, W)(stride 16)。
+            pos: その位置の埋め込み (B, C, H, W)。
+            out_dict: 過去の出力 {"cond": {t: 出力}, "non_cond": {t: 出力}}。
+            num_frames: 動画(区間)のフレームの数(物体のポインタの数の上限に使う)。
+
+        Returns:
+            記憶で直した画像の特徴 (B, C, H, W)。
         """
         b, c, h, w = feat.shape
         if is_init_cond:  # 公式の directly_add_no_mem_embed
@@ -221,7 +275,17 @@ class SAM2(nn.Module):
         return out.transpose(1, 2).reshape(b, c, h, w)
 
     def _encode_memory(self, feat, high_res_masks, obj_logits, from_pts: bool):
-        """予測のマスクから記憶を作る(公式の _encode_new_memory)。Returns: (記憶の特徴 (B, M, H, W), 位置の埋め込み)。"""
+        """予測のマスクから記憶を作る(公式の _encode_new_memory)。
+
+        Args:
+            feat: 画像の特徴 (B, C, H, W)(stride 16)。
+            high_res_masks: 高解像度のマスクの値 (B, 1, S, S)。
+            obj_logits: 物体らしさの値 (B, 1)(物体がなければ no_obj_embed_spatial を足す)。
+            from_pts: 点のプロンプトから出したマスクか(推論では 0/1 にしてから記憶にする)。
+
+        Returns:
+            (記憶の特徴 (B, M, H, W), 位置の埋め込み)。
+        """
         if self.binarize_mask_from_pts_for_mem_enc and from_pts and not self.training:
             m = (high_res_masks > 0).float()
         else:
@@ -233,6 +297,15 @@ class SAM2(nn.Module):
         return mem, mem_pos
 
     def _use_multimask(self, is_init_cond: bool, points) -> bool:
+        """複数のマスクを出すか(点の数が multimask_min_pt_num〜multimask_max_pt_num のとき。公式の _use_multimask)。
+
+        Args:
+            is_init_cond: 最初の条件のフレームか(公式の multimask_output_in_sam・for_tracking が True なので結果に関係しない)。
+            points: 点のプロンプトか None。
+
+        Returns:
+            複数のマスクを出すなら True。
+        """
         n = 0 if points is None else points["point_labels"].shape[1]
         return self.multimask_min_pt_num <= n <= self.multimask_max_pt_num  # multimask_output_in_sam・for_tracking は True
 
@@ -242,8 +315,19 @@ class SAM2(nn.Module):
         """1 フレーム分(公式の SAM2Train.track_step。correct なら修正の点を 7 回足す)。
 
         Args:
-            feats・pos: この物体のまとめの [stride 4, 8, 16] の特徴と位置の埋め込み (B, ·, ·, ·)。
-            points: 点のプロンプトか None。mask_inputs: マスクのプロンプト (B, 1, S, S) か None。gt_masks: 修正の点の元 (B, 1, S, S)。
+            t: 今の時刻。
+            is_init_cond: 条件のフレーム(プロンプトを与えるフレーム)か。
+            feats: この物体のまとめの [stride 4, 8, 16] の特徴 (B, ·, ·, ·)。
+            pos: 同じ段の位置の埋め込み。
+            points: 点のプロンプトか None。
+            mask_inputs: マスクのプロンプト (B, 1, S, S) か None。
+            out_dict: 過去の出力 {"cond": {t: 出力}, "non_cond": {t: 出力}}。
+            num_frames: 動画(区間)のフレームの数。
+            gt_masks: 修正の点を選ぶ元の正解 (B, 1, S, S)(correct のとき)。
+            correct: 修正の点を 7 回足すか(公式の num_correction_pt_per_frame)。
+            run_mem: このフレームの記憶を作るか。
+            rng: 修正の点を正解だけから選ぶかの乱数。
+            prob_gt_pt: 修正の点を予測の誤りでなく正解だけから選ぶ確率(公式の prob_to_sample_from_gt_for_train)。
 
         Returns:
             {"pred_masks", "pred_masks_high_res", "obj_ptr", "object_score_logits", "maskmem_features", "maskmem_pos_enc",
@@ -281,7 +365,16 @@ class SAM2(nn.Module):
 
 
 def concat_points(old, pts, labels):
-    """点のプロンプトに点を足す(公式の concat_points)。"""
+    """点のプロンプトに点を足す(公式の concat_points)。
+
+    Args:
+        old: 今までの点のプロンプト {"point_coords", "point_labels"} か None。
+        pts: 足す点 (B, n, 2)。
+        labels: 足す点のラベル (B, n)。
+
+    Returns:
+        {"point_coords": (B, P + n, 2), "point_labels": (B, P + n)}。
+    """
     if old is None:
         return {"point_coords": pts, "point_labels": labels}
     return {"point_coords": torch.cat([old["point_coords"], pts], 1), "point_labels": torch.cat([old["point_labels"], labels], 1)}
@@ -290,8 +383,13 @@ def concat_points(old, pts, labels):
 def sample_points_from_errors(gt: torch.Tensor, pred: torch.Tensor | None, num_pt: int = 1):
     """誤りの領域から点を一様に選ぶ(公式の sample_random_points_from_errors。学習の "uniform")。
 
-    Args: gt (B, 1, S, S) の bool、pred (B, 1, S, S) の bool か None(空とみなす)。
-    Returns: (点 (B, num_pt, 2) の (x, y), ラベル (B, num_pt)(1 = 正 = 見逃し、0 = 負 = 誤検出))。
+    Args:
+        gt: 正解 (B, 1, S, S) の bool。
+        pred: 予測 (B, 1, S, S) の bool か None(空とみなす)。
+        num_pt: 選ぶ点の数。
+
+    Returns:
+        (点 (B, num_pt, 2) の (x, y), ラベル (B, num_pt)(1 = 正 = 見逃し、0 = 負 = 誤検出))。
     """
     if pred is None:
         pred = torch.zeros_like(gt)
@@ -310,7 +408,13 @@ def sample_points_from_errors(gt: torch.Tensor, pred: torch.Tensor | None, num_p
 def sample_box_points(masks: torch.Tensor, noise: float = 0.1, noise_bound: int = 20):
     """マスクの箱の左上・右下を、箱の大きさの 10%(最大 20 画素)まで揺らした 2 点にする(公式の sample_box_points)。
 
-    Args: masks (B, 1, S, S)。Returns: (点 (B, 2, 2), ラベル (B, 2)(2 = 左上、3 = 右下))。
+    Args:
+        masks: (B, 1, S, S)。
+        noise: 箱の大きさに対する揺らしの割合。
+        noise_bound: 揺らしの上限(画素)。
+
+    Returns:
+        (点 (B, 2, 2), ラベル (B, 2)(2 = 左上、3 = 右下))。
     """
     b, _, h, w = masks.shape
     dev = masks.device

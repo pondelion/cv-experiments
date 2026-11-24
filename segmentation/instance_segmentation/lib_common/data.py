@@ -24,7 +24,8 @@ def ann_mask(ann: dict, h: int, w: int) -> np.ndarray:
 
     Args:
         ann: COCO の注釈(segmentation を持つ)。
-        h, w: 画像の縦・横の画素数。
+        h: 画像の縦の画素数。
+        w: 画像の横の画素数。
 
     Returns:
         (h, w) の uint8 の 0/1。

@@ -1,0 +1,266 @@
+{
+ "ocsort_th0.15": {
+  "config": {
+   "det_thresh": 0.15,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.691552837760568,
+    "DetA": 54.99640329340792,
+    "AssA": 12.357384734546399,
+    "LocA": 82.22732974060084,
+    "MOTA": 57.29465172364875,
+    "IDSW": 3009.0,
+    "IDF1": 22.41250037489128
+   }
+  }
+ },
+ "ocsort_th0.2": {
+  "config": {
+   "det_thresh": 0.2,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.848245649721207,
+    "DetA": 55.6135535074838,
+    "AssA": 12.359442876964238,
+    "LocA": 82.25164955853639,
+    "MOTA": 59.153071357639384,
+    "IDSW": 2761.0,
+    "IDF1": 22.64406779661017
+   }
+  }
+ },
+ "ocsort_th0.3": {
+  "config": {
+   "det_thresh": 0.3,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 27.00401284303563,
+    "DetA": 56.29048830370373,
+    "AssA": 13.287945855876412,
+    "LocA": 82.39602960332762,
+    "MOTA": 61.044119733295496,
+    "IDSW": 2484.0,
+    "IDF1": 24.560951196578603
+   }
+  }
+ },
+ "ocsort_th0.4": {
+  "config": {
+   "det_thresh": 0.4,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 26.83464818315167,
+    "DetA": 56.79136223468748,
+    "AssA": 12.970921735531393,
+    "LocA": 82.49561783101429,
+    "MOTA": 62.011632855724216,
+    "IDSW": 2318.0,
+    "IDF1": 24.560173186571944
+   }
+  }
+ },
+ "ocsort_th0.5": {
+  "config": {
+   "det_thresh": 0.5,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 27.815351793976927,
+    "DetA": 57.16128683976274,
+    "AssA": 13.853433055217382,
+    "LocA": 82.58487711169025,
+    "MOTA": 63.231664065824944,
+    "IDSW": 2105.0,
+    "IDF1": 25.527424547129847
+   }
+  }
+ },
+ "ocsort_th0.6": {
+  "config": {
+   "det_thresh": 0.6,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 28.621816155612283,
+    "DetA": 57.38606485200126,
+    "AssA": 14.586907040498383,
+    "LocA": 82.58611121940451,
+    "MOTA": 64.02184707050645,
+    "IDSW": 1987.0,
+    "IDF1": 26.459627329192546
+   }
+  }
+ },
+ "ocsort_th0.7": {
+  "config": {
+   "det_thresh": 0.7,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 28.3942684074653,
+    "DetA": 57.75793298788482,
+    "AssA": 14.222794960238913,
+    "LocA": 82.73606559223293,
+    "MOTA": 64.85033338062136,
+    "IDSW": 1802.0,
+    "IDF1": 25.679244266169825
+   }
+  }
+ },
+ "ocsort_th0.8": {
+  "config": {
+   "det_thresh": 0.8,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.08911311376618,
+    "DetA": 57.43917188692214,
+    "AssA": 16.06142804326885,
+    "LocA": 82.77937034827302,
+    "MOTA": 65.55681656972621,
+    "IDSW": 1625.0,
+    "IDF1": 28.726472138670967
+   }
+  }
+ },
+ "ocsort_th0.85": {
+  "config": {
+   "det_thresh": 0.85,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.765248274066835,
+    "DetA": 57.61997711432713,
+    "AssA": 16.693299019824863,
+    "LocA": 83.02823820412262,
+    "MOTA": 66.1072492552135,
+    "IDSW": 1431.0,
+    "IDF1": 29.848553522029285
+   }
+  }
+ },
+ "ocsort_th0.9": {
+  "config": {
+   "det_thresh": 0.9,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.967064904271695,
+    "DetA": 55.889324627323845,
+    "AssA": 17.38886883266997,
+    "LocA": 83.45615298144926,
+    "MOTA": 64.89998581359058,
+    "IDSW": 1151.0,
+    "IDF1": 31.088390131331177
+   }
+  }
+ },
+ "ocsort_th0.95": {
+  "config": {
+   "det_thresh": 0.95,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.841191222228698,
+    "DetA": 39.89721819821395,
+    "AssA": 16.857439279781374,
+    "LocA": 85.69771428089685,
+    "MOTA": 45.0886650588736,
+    "IDSW": 649.0,
+    "IDF1": 28.191087613293053
+   }
+  }
+ }
+}

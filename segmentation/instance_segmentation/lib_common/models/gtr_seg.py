@@ -94,6 +94,7 @@ def distance2bbox(ref: torch.Tensor, distance: torch.Tensor, reg_scale: float = 
     Args:
         ref: 参照の枠 (..., 4) cx, cy, w, h。
         distance: (..., 4) 左・上・右・下のずれ。
+        reg_scale: ずれの単位の大きさ(既定は REG_SCALE)。
 
     Returns:
         (..., 4) cx, cy, w, h。
@@ -108,7 +109,9 @@ class MLP(nn.Module):
     """全結合の層を重ねたもの(最後の層の後は活性化なし)。
 
     Args:
-        din, dhidden, dout: 入力・途中・出力の次元。
+        din: 入力の次元。
+        dhidden: 途中の次元。
+        dout: 出力の次元。
         layers: 層の数。
         act: 活性化("silu" / "relu")。
     """
@@ -260,6 +263,7 @@ class DecoderLayer(nn.Module):
         ffn: FFN の途中の次元。
         heads: 頭の数。
         dim: クエリの次元(既定は D_MODEL)。
+        points: deformable な注意の、3 段の特徴ごとの点の数(既定は NUM_POINTS)。
     """
 
     def __init__(self, groups: int, ffn: int = 1024, heads: int = 8, dim: int = D_MODEL,
@@ -309,7 +313,12 @@ class DecoderLayer(nn.Module):
 
 
 class LQE(nn.Module):
-    """分布の上位 4 つの確率とその平均から、枠の確からしさを求めてクラスの値に足す(最初は 0 を足す)。"""
+    """分布の上位 4 つの確率とその平均から、枠の確からしさを求めてクラスの値に足す(最初は 0 を足す)。
+
+    Args:
+        k: 使う上位の確率の数。
+        hidden: MLP の途中の次元。
+    """
 
     def __init__(self, k: int = 4, hidden: int = 64):
         super().__init__()

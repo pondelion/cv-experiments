@@ -61,10 +61,19 @@ EXCLUDED_PLACES = ["cafe", "harbor", "restaurant"]
 
 
 def read_jsonl(path) -> list[dict]:
+    """JSON Lines のファイルを読む。
+
+    Args:
+        path: ファイルのパス(Path)。
+
+    Returns:
+        行ごとの dict の並び(ファイルがなければ空)。
+    """
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
 def stage_descriptions() -> None:
+    """1 段目の前: クラスごとに N_DESC 個の物体の説明文を LLM で作り、objects/descriptions.json に保存する(クラスごとに再開できる)。"""
     path = OUT / "objects" / "descriptions.json"
     desc = json.loads(path.read_text()) if path.exists() else {}
     for name in NAMES:
@@ -77,6 +86,7 @@ def stage_descriptions() -> None:
 
 
 def stage_objects() -> None:
+    """1 段目: 説明文ごとに物体を無地の背景で生成し、背景の色の規則で抜き出して保存する(作った物体は飛ばす)。"""
     desc = json.loads((OUT / "objects" / "descriptions.json").read_text())
     rec_path = OUT / "objects" / "objects.jsonl"
     done = {r["id"] for r in read_jsonl(rec_path)}
@@ -109,6 +119,7 @@ def stage_objects() -> None:
 
 
 def stage_filter1() -> None:
+    """フィルター (1): 生成した物体ごとに、ollama の VLM で「頼んだクラスの確率」を記録する(捨てない。objects/filter1.json)。"""
     recs = read_jsonl(OUT / "objects" / "objects.jsonl")
     out_path = OUT / "objects" / "filter1.json"
     scores = json.loads(out_path.read_text()) if out_path.exists() else {}
@@ -126,7 +137,11 @@ def stage_filter1() -> None:
 
 
 def load_library() -> dict[str, list]:
-    """規則で使えると判定した物体を、クラスごとの切り抜きの一覧にする(フィルターの確率に関わらず全部。① 用)。"""
+    """規則で使えると判定した物体を、クラスごとの切り抜きの一覧にする(フィルターの確率に関わらず全部。① 用)。
+
+    Returns:
+        {クラス名: [切り抜き]}。
+    """
     lib: dict[str, list] = {}
     for r in read_jsonl(OUT / "objects" / "objects.jsonl"):
         if r["usable"]:
@@ -139,7 +154,15 @@ def load_library() -> dict[str, list]:
 
 
 def gray_boxes(image: np.ndarray, masks: list[np.ndarray]) -> np.ndarray:
-    """置いた物体を、枠を 10% + 4 画素広げた灰色の四角で隠す(exp00002 と同じ隠し方)。"""
+    """置いた物体を、枠を 10% + 4 画素広げた灰色の四角で隠す(exp00002 と同じ隠し方)。
+
+    Args:
+        image: 画像 (H, W, 3)。
+        masks: 置いた物体のマスク (H, W) の並び。
+
+    Returns:
+        隠した画像 (H, W, 3)。
+    """
     out = image.copy()
     for m in masks:
         ys, xs = np.nonzero(m)
@@ -192,6 +215,16 @@ def plan_scenes(n: int, lib: dict[str, list], pool: dict, n_desc: dict[str, int]
         4. m 個を k クラスに、どのクラスも 1 個以上になるようランダムに分ける
     数は場面の先頭から順にそろえていくので、先頭の何枚を使っても(2k・5k など)クラスごとの数はほぼそろう。
     数えるのは置き方を決めた物体(重なりで置けなかった物体は数えない)。
+
+    Args:
+        n: 場面の数。
+        lib: load_library の返り値。
+        pool: 場所とクラスの組み合わせのプール。
+        n_desc: 場所ごとの背景の説明文の数。
+        rng: 乱数。
+
+    Returns:
+        場面ごとの (場所, 説明文の番号, 物体の置き方)。
     """
     count = {x: 0 for x in lib}
     combos = [c for c in pool["combos"] if all(x in lib for x in c["classes"]) and c["place"] not in EXCLUDED_PLACES]
@@ -299,6 +332,7 @@ def stage_scenes(n: int, out_dir: Path) -> None:
 
 
 def main() -> None:
+    """引数で選んだ段(--stage)を順に動かす。"""
     global OUT, N_DESC
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", choices=["descriptions", "objects", "filter1", "combos", "place_descriptions", "scenes",

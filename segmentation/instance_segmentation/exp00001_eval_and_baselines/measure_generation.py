@@ -30,6 +30,7 @@ PROMPTS = [
 
 
 def main() -> None:
+    """画像の大きさごとに 1 枚の生成の時間を測り、結果を保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", type=int, nargs="+", default=[512, 768, 1024])
     parser.add_argument("--warmup", type=int, default=2)

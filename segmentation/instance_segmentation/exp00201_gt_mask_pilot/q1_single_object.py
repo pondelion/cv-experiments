@@ -30,7 +30,14 @@ from lib_common.synthetic_data.prompts import BACKGROUNDS, object_prompt
 
 
 def summarize_records(records: list[dict]) -> dict:
-    """使える割合と、各値の中央値をまとめる。"""
+    """使える割合と、各値の中央値をまとめる。
+
+    Args:
+        records: 生成した物体ごとの記録({"usable", "stats"})。
+
+    Returns:
+        {"n", "usable_rate", "bg_spread_median", "single_component_rate", "touches_border_rate", "area_ratio_median"}。
+    """
     s = [r["stats"] for r in records]
     return {
         "n": len(records),
@@ -43,6 +50,7 @@ def summarize_records(records: list[dict]) -> dict:
 
 
 def main() -> None:
+    """クラスごとに物体を生成して抜き出し、使える割合などをまとめて保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--per-class", type=int, default=5)
     parser.add_argument("--backgrounds", nargs="+", default=list(BACKGROUNDS))

@@ -30,16 +30,36 @@ VOC_NAMES = {n for n, _ in VOC20}
 
 
 def crop(image: Image.Image, bbox, margin: float = 0.1) -> Image.Image:
+    """枠を幅・高さの margin 倍ずつ広げて切り出す(画像の外は切り詰める)。
+
+    Args:
+        image: 画像。
+        bbox: COCO の枠 (x, y, w, h)。
+        margin: 広げる割合。
+
+    Returns:
+        切り出した画像。
+    """
     x, y, w, h = bbox
     dx, dy = w * margin, h * margin
     return image.crop((max(0, x - dx), max(0, y - dy), min(image.width, x + w + dx), min(image.height, y + h + dy)))
 
 
 def main() -> None:
+    """検品の問題の画像と正解を作り、保存する。"""
     rng = random.Random(0)
     labels = []
 
     def save(img: Image.Image, task: str, kind: str, k: int, label: str) -> None:
+        """問題の画像を保存し、正解を labels に足す。
+
+        Args:
+            img: 問題の画像。
+            task: 検品の種類(t1・t2)。
+            kind: 問題の種類。
+            k: 番号。
+            label: 正解。
+        """
         path = OUT / task / kind / f"{k:04d}.jpg"
         path.parent.mkdir(parents=True, exist_ok=True)
         img.convert("RGB").save(path, quality=95)

@@ -19,7 +19,14 @@ from segmentation.instance_segmentation.lib_common.evaluate import evaluate
 
 
 def gt_as_predictions(set_name: str) -> list[dict]:
-    """正解の物体(群衆の領域は除く)を、スコア 1.0 の予測の形にする。"""
+    """正解の物体(群衆の領域は除く)を、スコア 1.0 の予測の形にする。
+
+    Args:
+        set_name: 評価のセットの名前。
+
+    Returns:
+        予測の並び。
+    """
     gt = COCO(str(set_path(set_name)))
     return [
         {"image_id": a["image_id"], "category_id": a["category_id"], "segmentation": gt.annToRLE(a),
@@ -29,13 +36,28 @@ def gt_as_predictions(set_name: str) -> list[dict]:
 
 
 def shrink(p: dict, pixels: int = 2) -> dict:
-    """予測のマスクを、3×3 の縮小で pixels 画素だけ縮める(枠はマスクから計算し直させるため外す)。"""
+    """予測のマスクを、3×3 の縮小で pixels 画素だけ縮める(枠はマスクから計算し直させるため外す)。
+
+    Args:
+        p: 予測。
+        pixels: 縮める画素の数。
+
+    Returns:
+        縮めた予測。
+    """
     mask = cv2.erode(rle_to_mask(p["segmentation"]).astype(np.uint8), np.ones((3, 3), np.uint8), iterations=pixels)
     return {k: v for k, v in p.items() if k != "bbox"} | {"segmentation": mask_to_rle(mask)}
 
 
 def summary(r: dict) -> str:
-    """結果の主な値を 1 行にする。"""
+    """結果の主な値を 1 行にする。
+
+    Args:
+        r: 評価の結果。
+
+    Returns:
+        1 行の文字列。
+    """
     s = f"mask AP {r['segm']['AP']:.3f} AP50 {r['segm']['AP50']:.3f} AR100 {r['segm']['AR100']:.3f}"
     if "pq" in r:
         s += (f" | 最良IoU平均 {r['best_iou_mean']:.3f} PQ {r['pq']['PQ']:.3f} SQ {r['pq']['SQ']:.3f} "
@@ -44,6 +66,7 @@ def summary(r: dict) -> str:
 
 
 def main() -> None:
+    """答えのわかる予測(正解そのもの・縮めたもの)で評価し、値を表示する。"""
     for set_name in ["coco_val_dev", "voc_val"]:
         preds = gt_as_predictions(set_name)
         perfect = evaluate(set_name, preds)

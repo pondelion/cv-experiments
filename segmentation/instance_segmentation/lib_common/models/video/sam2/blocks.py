@@ -13,7 +13,16 @@ from torch import nn
 
 
 class MLP(nn.Module):
-    """num_layers 層の MLP(層の間は activation。最後に sigmoid をかけることもできる)。公式の sam2_utils.MLP と同じ。"""
+    """num_layers 層の MLP(層の間は activation。最後に sigmoid をかけることもできる)。公式の sam2_utils.MLP と同じ。
+
+    Args:
+        d_in: 入力の次元。
+        d_hidden: 中間の次元。
+        d_out: 出力の次元。
+        num_layers: 層の数。
+        activation: 層の間の活性化の nn.Module のクラス。
+        sigmoid_output: 最後に sigmoid をかけるか。
+    """
 
     def __init__(self, d_in: int, d_hidden: int, d_out: int, num_layers: int, activation=nn.ReLU, sigmoid_output: bool = False):
         super().__init__()
@@ -23,6 +32,14 @@ class MLP(nn.Module):
         self.sigmoid_output = sigmoid_output
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """MLP をかける。
+
+        Args:
+            x: (..., d_in)。
+
+        Returns:
+            (..., d_out)。
+        """
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i < len(self.layers) - 1:
@@ -31,23 +48,38 @@ class MLP(nn.Module):
 
 
 class LayerNorm2d(nn.Module):
-    """チャンネルの軸の LayerNorm((B, C, H, W) のまま。eps 1e-6)。"""
+    """チャンネルの軸の LayerNorm((B, C, H, W) のまま)。
+
+    Args:
+        c: チャンネル。
+        eps: 分散に足す小さい値(公式は 1e-6)。
+    """
 
     def __init__(self, c: int, eps: float = 1e-6):
         super().__init__()
         self.weight, self.bias, self.eps = nn.Parameter(torch.ones(c)), nn.Parameter(torch.zeros(c)), eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """チャンネルの軸で正規化する。
+
+        Args:
+            x: (B, C, H, W)。
+
+        Returns:
+            (B, C, H, W)。
+        """
         u = x.mean(1, keepdim=True)
         s = (x - u).pow(2).mean(1, keepdim=True)
         return self.weight[:, None, None] * (x - u) / torch.sqrt(s + self.eps) + self.bias[:, None, None]
 
 
 class PositionEmbeddingSine(nn.Module):
-    """画像の格子の sine の位置の埋め込み(DETR と同じ。normalize: 位置を 0〜2π に揃える)。
+    """画像の格子の sine の位置の埋め込み(DETR と同じ)。
 
     Args:
         num_pos_feats: 出力のチャンネルの数(縦・横で半分ずつ)。
+        temperature: 周波数の底。
+        normalize: 位置を 0〜2π にそろえるか。
     """
 
     def __init__(self, num_pos_feats: int, temperature: float = 10000, normalize: bool = True):
@@ -56,7 +88,14 @@ class PositionEmbeddingSine(nn.Module):
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Args: x (B, *, H, W)。Returns: (B, num_pos_feats, H, W)。"""
+        """x と同じ縦・横の格子の位置の埋め込みを作る(値は x の形だけで決まる)。
+
+        Args:
+            x: (B, *, H, W)。
+
+        Returns:
+            (B, num_pos_feats, H, W)。
+        """
         b, h, w, dev = x.shape[0], x.shape[-2], x.shape[-1], x.device
         y = torch.arange(1, h + 1, dtype=torch.float32, device=dev)[:, None].expand(h, w)
         xx = torch.arange(1, w + 1, dtype=torch.float32, device=dev)[None, :].expand(h, w)
@@ -72,19 +111,38 @@ class PositionEmbeddingSine(nn.Module):
 
 
 class PositionEmbeddingRandom(nn.Module):
-    """ランダムな周波数の位置の埋め込み(SAM の prompt encoder。2 × num_pos_feats チャンネル)。"""
+    """ランダムな周波数の位置の埋め込み(SAM の prompt encoder。2 × num_pos_feats チャンネル)。
+
+    Args:
+        num_pos_feats: 周波数の数。
+        scale: 周波数の正規分布の標準偏差。
+    """
 
     def __init__(self, num_pos_feats: int = 64, scale: float = 1.0):
         super().__init__()
         self.register_buffer("gaussian", scale * torch.randn(2, num_pos_feats))
 
     def _encode(self, coords: torch.Tensor) -> torch.Tensor:
-        """Args: coords (..., 2) は 0〜1 の (x, y)。Returns: (..., 2 × num_pos_feats)。"""
+        """座標を sin・cos の埋め込みにする。
+
+        Args:
+            coords: (..., 2) の 0〜1 の (x, y)。
+
+        Returns:
+            (..., 2 × num_pos_feats)。
+        """
         c = 2 * math.pi * ((2 * coords - 1) @ self.gaussian)
         return torch.cat([c.sin(), c.cos()], dim=-1)
 
     def forward(self, size: tuple[int, int]) -> torch.Tensor:
-        """格子の埋め込み。Returns: (C, h, w)(各画素の中心の座標)。"""
+        """格子の埋め込み(各画素の中心の座標)。
+
+        Args:
+            size: 格子の (h, w)。
+
+        Returns:
+            (C, h, w)。
+        """
         h, w = size
         dev = self.gaussian.device
         y = (torch.arange(h, device=dev, dtype=torch.float32) + 0.5) / h
@@ -93,7 +151,15 @@ class PositionEmbeddingRandom(nn.Module):
         return self._encode(grid).permute(2, 0, 1)
 
     def forward_with_coords(self, coords: torch.Tensor, image_size: tuple[int, int]) -> torch.Tensor:
-        """画素の座標の点の埋め込み。Args: coords (B, N, 2) の (x, y)。Returns: (B, N, C)。"""
+        """画素の座標の点の埋め込み。
+
+        Args:
+            coords: (B, N, 2) の画素の (x, y)。
+            image_size: 画像の (縦, 横)(座標を 0〜1 にするのに使う)。
+
+        Returns:
+            (B, N, C)。
+        """
         c = coords.clone().float()
         c[..., 0] = c[..., 0] / image_size[1]
         c[..., 1] = c[..., 1] / image_size[0]
@@ -101,7 +167,16 @@ class PositionEmbeddingRandom(nn.Module):
 
 
 def get_1d_sine_pe(pos: torch.Tensor, dim: int, temperature: float = 10000) -> torch.Tensor:
-    """1 次元の sine の位置の埋め込み(時刻の埋め込みに使う)。Args: pos (N,)。Returns: (N, dim)。"""
+    """1 次元の sine の位置の埋め込み(時刻の埋め込みに使う)。
+
+    Args:
+        pos: 位置 (N,)。
+        dim: 埋め込みの次元。
+        temperature: 周波数の底。
+
+    Returns:
+        (N, dim)。
+    """
     half = dim // 2
     dim_t = temperature ** (2 * (torch.arange(half, dtype=torch.float32, device=pos.device) // 2) / half)
     p = pos[:, None] / dim_t
@@ -109,7 +184,17 @@ def get_1d_sine_pe(pos: torch.Tensor, dim: int, temperature: float = 10000) -> t
 
 
 def axial_rope(dim: int, w: int, h: int, theta: float = 10000.0) -> torch.Tensor:
-    """2 次元の軸ごとの RoPE の回転(複素数)。x と y にそれぞれ dim / 4 個の周波数。Returns: (w·h, dim / 2) の複素数。"""
+    """2 次元の軸ごとの RoPE の回転(複素数)。x と y にそれぞれ dim / 4 個の周波数。
+
+    Args:
+        dim: 注意の頭の次元。
+        w: 格子の横。
+        h: 格子の縦。
+        theta: 周波数の底。
+
+    Returns:
+        (w·h, dim / 2) の複素数。
+    """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 4)[: dim // 4].float() / dim))
     t = torch.arange(w * h, dtype=torch.float32)
     tx, ty = t % w, torch.div(t, w, rounding_mode="floor")
@@ -118,7 +203,16 @@ def axial_rope(dim: int, w: int, h: int, theta: float = 10000.0) -> torch.Tensor
 
 
 def apply_rope(x: torch.Tensor, freqs: torch.Tensor, repeat: int = 1) -> torch.Tensor:
-    """RoPE をかける。Args: x (B, h, N, d)、freqs (N / repeat, d / 2)(repeat > 1 のときは、同じ格子が repeat 回並んだキー)。"""
+    """RoPE をかける。
+
+    Args:
+        x: (B, h, N, d)。
+        freqs: 回転 (N / repeat, d / 2) の複素数。
+        repeat: 同じ格子が並んだ回数(記憶のフレームのキーは、同じ格子が repeat 回並ぶ)。
+
+    Returns:
+        (B, h, N, d)。
+    """
     xc = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
     f = freqs.repeat(repeat, 1) if repeat > 1 else freqs
     return torch.view_as_real(xc * f.to(xc.device)).flatten(3).type_as(x)
@@ -128,8 +222,11 @@ class Attention(nn.Module):
     """q・k・v を射影してから downsample_rate で次元を減らす注意(SAM の Attention)。
 
     Args:
-        dim: 入力・出力の次元。num_heads: 頭の数。downsample_rate: 内部の次元 = dim / downsample_rate。
-        dropout: 注意の dropout。kv_in_dim: k・v の入力の次元(省略すると dim)。
+        dim: 入力・出力の次元。
+        num_heads: 頭の数。
+        downsample_rate: 内部の次元 = dim / downsample_rate。
+        dropout: 注意の dropout。
+        kv_in_dim: k・v の入力の次元(省略すると dim)。
     """
 
     def __init__(self, dim: int, num_heads: int, downsample_rate: int = 1, dropout: float = 0.0, kv_in_dim: int | None = None):
@@ -140,15 +237,43 @@ class Attention(nn.Module):
         self.out_proj = nn.Linear(self.inner, dim)
 
     def _heads(self, x: torch.Tensor) -> torch.Tensor:
+        """頭の軸に分ける。
+
+        Args:
+            x: (B, N, C)。
+
+        Returns:
+            (B, h, N, C / h)。
+        """
         b, n, c = x.shape
         return x.reshape(b, n, self.num_heads, c // self.num_heads).transpose(1, 2)  # (B, N, C) -> (B, h, N, C/h)
 
     def _attend(self, q, k, v) -> torch.Tensor:
+        """頭ごとの注意をとり、頭をまとめて出力の射影をかける。
+
+        Args:
+            q: (B, h, N, d)。
+            k: (B, h, M, d)。
+            v: (B, h, M, d)。
+
+        Returns:
+            (B, N, dim)。
+        """
         out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout if self.training else 0.0)
         b, h, n, d = out.shape
         return self.out_proj(out.transpose(1, 2).reshape(b, n, h * d))
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """注意をとる。
+
+        Args:
+            q: 問い (B, N, dim)。
+            k: キー (B, M, kv_in_dim)。
+            v: 値 (B, M, kv_in_dim)。
+
+        Returns:
+            (B, N, dim)。
+        """
         return self._attend(self._heads(self.q_proj(q)), self._heads(self.k_proj(k)), self._heads(self.v_proj(v)))
 
 
@@ -156,8 +281,10 @@ class RoPEAttention(Attention):
     """2 次元の RoPE をかける注意(SAM 2 の記憶の注意)。問いは H × W の格子のトークン。
 
     Args:
+        *args: Attention の引数。
+        rope_theta: RoPE の周波数の底。
         rope_k_repeat: キーが問いと同じ格子を何回か並べたもの(記憶のフレーム)のとき True(同じ回転をくり返してかける)。
-        num_k_exclude_rope(forward): キーの最後のこの数のトークン(物体のポインタ)には RoPE をかけない。
+        **kw: Attention の引数。
     """
 
     def __init__(self, *args, rope_theta: float = 10000.0, rope_k_repeat: bool = False, **kw):
@@ -166,6 +293,17 @@ class RoPEAttention(Attention):
         self._cache = {}
 
     def forward(self, q, k, v, num_k_exclude_rope: int = 0):
+        """問いとキーに RoPE をかけて注意をとる。
+
+        Args:
+            q: 問い (B, H·W, dim)(正方形の格子)。
+            k: キー (B, M, kv_in_dim)。
+            v: 値 (B, M, kv_in_dim)。
+            num_k_exclude_rope: キーの最後のこの数のトークン(物体のポインタ)には RoPE をかけない。
+
+        Returns:
+            (B, H·W, dim)。
+        """
         q, k, v = self._heads(self.q_proj(q)), self._heads(self.k_proj(k)), self._heads(self.v_proj(v))
         side = int(math.sqrt(q.shape[-2]))  # 問いは正方形の格子(公式と同じ前提)
         key = (side, q.shape[-1])
@@ -182,7 +320,15 @@ class RoPEAttention(Attention):
 
 
 class TwoWayBlock(nn.Module):
-    """two-way transformer の 1 層: トークンの self-attention → トークンから画像への注意 → MLP → 画像からトークンへの注意。"""
+    """two-way transformer の 1 層: トークンの self-attention → トークンから画像への注意 → MLP → 画像からトークンへの注意。
+
+    Args:
+        dim: 次元。
+        num_heads: 頭の数。
+        mlp_dim: MLP の中間の次元。
+        downsample: トークンと画像の間の注意の次元の減らし方。
+        skip_first_pe: 最初の層なら True(self-attention に位置の埋め込みを足さず、残差も足さない。公式と同じ)。
+    """
 
     def __init__(self, dim: int, num_heads: int, mlp_dim: int, downsample: int, skip_first_pe: bool):
         super().__init__()
@@ -194,6 +340,17 @@ class TwoWayBlock(nn.Module):
         self.skip_first_pe = skip_first_pe
 
     def forward(self, queries, keys, query_pe, key_pe):
+        """1 層進める。
+
+        Args:
+            queries: トークン (B, N, dim)。
+            keys: 画像のトークン (B, H·W, dim)。
+            query_pe: トークンの位置の埋め込み (B, N, dim)(最初のトークンそのもの)。
+            key_pe: 画像の位置の埋め込み (B, H·W, dim)。
+
+        Returns:
+            (トークン (B, N, dim), 画像のトークン (B, H·W, dim))。
+        """
         if self.skip_first_pe:
             queries = self.self_attn(queries, queries, queries)
         else:
@@ -207,7 +364,15 @@ class TwoWayBlock(nn.Module):
 
 
 class TwoWayTransformer(nn.Module):
-    """SAM のマスクの decoder の transformer(depth 層 + 最後のトークンから画像への注意)。"""
+    """SAM のマスクの decoder の transformer(depth 層 + 最後のトークンから画像への注意)。
+
+    Args:
+        depth: 層の数。
+        dim: 次元。
+        num_heads: 頭の数。
+        mlp_dim: MLP の中間の次元。
+        downsample: トークンと画像の間の注意の次元の減らし方。
+    """
 
     def __init__(self, depth: int = 2, dim: int = 256, num_heads: int = 8, mlp_dim: int = 2048, downsample: int = 2):
         super().__init__()
@@ -216,7 +381,16 @@ class TwoWayTransformer(nn.Module):
         self.norm_final = nn.LayerNorm(dim)
 
     def forward(self, image: torch.Tensor, image_pe: torch.Tensor, tokens: torch.Tensor):
-        """Args: image・image_pe (B, C, H, W)、tokens (B, N, C)。Returns: (トークン (B, N, C), 画像のトークン (B, H·W, C))。"""
+        """トークンと画像を相互に注意で混ぜる。
+
+        Args:
+            image: 画像の特徴 (B, C, H, W)。
+            image_pe: 画像の位置の埋め込み (B, C, H, W)。
+            tokens: トークン (B, N, C)。
+
+        Returns:
+            (トークン (B, N, C), 画像のトークン (B, H·W, C))。
+        """
         keys, key_pe = image.flatten(2).transpose(1, 2), image_pe.flatten(2).transpose(1, 2)
         queries = tokens
         for layer in self.layers:
@@ -228,7 +402,13 @@ class TwoWayTransformer(nn.Module):
 def select_closest_cond_frames(t: int, cond: dict, max_num: int) -> tuple[dict, dict]:
     """条件のフレーム(マスクを与えたフレーム)から、時刻 t に近いものを max_num 個選ぶ(前の最も近い 1 つ・後の最も近い 1 つ・残りは近い順)。
 
-    Returns: (選んだもの, 選ばなかったもの)。
+    Args:
+        t: 今の時刻。
+        cond: {時刻: 条件のフレームの出力}。
+        max_num: 選ぶ数(−1 なら全部)。
+
+    Returns:
+        (選んだもの, 選ばなかったもの)(どちらも cond と同じ形の dict)。
     """
     if max_num == -1 or len(cond) <= max_num:
         return cond, {}

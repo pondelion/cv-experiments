@@ -30,13 +30,28 @@ from segmentation.instance_segmentation.lib_common.video_eval import evaluate_vi
 
 
 def gt_as_pred(gt: dict) -> list[dict]:
-    """正解をそのまま予測の形にする(点数は全部 1)。"""
+    """正解をそのまま予測の形にする(点数は全部 1)。
+
+    Args:
+        gt: 共通の形式の正解。
+
+    Returns:
+        予測の並び。
+    """
     return [{"video_id": a["video_id"], "category_id": a["category_id"], "score": 1.0, "segmentations": a["segmentations"]}
             for a in gt["annotations"]]
 
 
 def shift_rle(rle: dict, dx: int) -> dict:
-    """RLE のマスクを横に dx 画素ずらす(端ははみ出た分を捨てる)。"""
+    """RLE のマスクを横に dx 画素ずらす(端ははみ出た分を捨てる)。
+
+    Args:
+        rle: マスクの RLE。
+        dx: ずらす画素の数。
+
+    Returns:
+        ずらしたマスクの RLE。
+    """
     m = mask_util.decode(rle)
     out = np.zeros_like(m)
     if dx >= 0:
@@ -49,7 +64,15 @@ def shift_rle(rle: dict, dx: int) -> dict:
 
 
 def perturbed(gt: dict, seed: int = 0) -> list[dict]:
-    """正解を崩した予測: 物体の 20% を消し、残りはマスクを 0〜12 画素ずらし、点数を乱数にし、偽の物体を 10% 足す。"""
+    """正解を崩した予測を作る(物体の 20% を消し、残りはマスクを 0〜12 画素ずらし、点数を乱数にし、偽の物体を 10% 足す)。
+
+    Args:
+        gt: 共通の形式の正解。
+        seed: 乱数の種。
+
+    Returns:
+        予測の並び。
+    """
     rng = random.Random(seed)
     preds = []
     for a in gt["annotations"]:
@@ -65,7 +88,16 @@ def perturbed(gt: dict, seed: int = 0) -> list[dict]:
 
 
 def official_ap(gt: dict, preds: list[dict], official_dir: str) -> list[float]:
-    """公式の YouTube-VIS の評価のコードで AP などを計算する(比べる相手として使うだけ)。"""
+    """公式の YouTube-VIS の評価のコードで AP などを計算する(比べる相手として使うだけ)。
+
+    Args:
+        gt: 共通の形式の正解。
+        preds: 予測の並び。
+        official_dir: 公式の評価のコードの置き場所。
+
+    Returns:
+        COCOeval の stats(AP・AP50・AP75 など)。
+    """
     sys.path.insert(0, official_dir)
     spec = importlib.util.spec_from_file_location("ytvos", f"{official_dir}/ytvos.py")
     ytvos = importlib.util.module_from_spec(spec); spec.loader.exec_module(ytvos)
@@ -82,6 +114,7 @@ def official_ap(gt: dict, preds: list[dict], official_dir: str) -> list[float]:
 
 
 def main() -> None:
+    """正解・崩した予測で、自作の評価と公式の評価の値を並べて比べる。"""
     p = argparse.ArgumentParser()
     p.add_argument("--set", default="vipseg_vis_val")
     p.add_argument("--official-dir", default=None)

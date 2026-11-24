@@ -38,12 +38,30 @@ JUDGES = {"intern": InternDecisionJudge, "ollama": OllamaVlmJudge}
 
 
 def auc(pos: list[float], neg: list[float]) -> float:
-    """正例の値が負例の値より大きい確率(同じ値は 0.5)。"""
+    """AUC: 正例の値が負例の値より大きい確率(同じ値は 0.5)。
+
+    Args:
+        pos: 正例の値。
+        neg: 負例の値。
+
+    Returns:
+        AUC。
+    """
     p, n = np.asarray(pos)[:, None], np.asarray(neg)[None, :]
     return float((p > n).mean() + 0.5 * (p == n).mean())
 
 
 def ece(conf: list[float], correct: list[bool], bins: int = 10) -> float:
+    """ECE(較正の誤差): 確率を bins 個の幅に分け、幅ごとの |確率の平均 − 正解の割合| を要素の割合で重みづけて足す。
+
+    Args:
+        conf: 答えの確率。
+        correct: 答えが正しかったか。
+        bins: 幅の数。
+
+    Returns:
+        ECE。
+    """
     conf, correct = np.asarray(conf), np.asarray(correct, float)
     idx = np.minimum((conf * bins).astype(int), bins - 1)
     return float(sum(abs(conf[idx == b].mean() - correct[idx == b].mean()) * (idx == b).mean()
@@ -51,6 +69,7 @@ def ece(conf: list[float], correct: list[bool], bins: int = 10) -> float:
 
 
 def main() -> None:
+    """選んだ判定モデルに全部の問題を答えさせ、精度・較正・速さを保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--judge", choices=list(JUDGES), default="intern")
     parser.add_argument("--summary-only", action="store_true", help="判定モデルを動かさず、保存した答えからまとめだけを計算し直す")

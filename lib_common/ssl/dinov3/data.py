@@ -45,7 +45,14 @@ class CropConfig:
 
 
 def _blur(p: float) -> v2.Transform:
-    """確率 p のガウスのぼかし(公式と同じ半径 0.1〜2.0)。"""
+    """確率 p のガウスのぼかし(公式と同じ半径 0.1〜2.0)。
+
+    Args:
+        p: かける確率。
+
+    Returns:
+        torchvision の変換。
+    """
     return v2.RandomApply([v2.GaussianBlur(kernel_size=9, sigma=(0.1, 2.0))], p=p)
 
 
@@ -75,8 +82,15 @@ class MultiCropAugmentation:
         self.distort_local = v2.Compose(jitter + [_blur(0.5)])
 
     def __call__(self, image) -> dict:
-        """Returns: {"global_crops": [(3, G, G)] × 2, "global_crops_teacher": 同じ, "local_crops": [(3, L, L)] × n,
-        "gram_teacher_crops": [(3, R, R)] × 2(作るときだけ)}。"""
+        """1 枚の画像から、大域・局所(・Gram の先生用)の切り抜きを作る。
+
+        Args:
+            image: PIL の画像。
+
+        Returns:
+            {"global_crops": [(3, G, G)] × 2, "global_crops_teacher": 同じ, "local_crops": [(3, L, L)] × n,
+             "gram_teacher_crops": [(3, R, R)] × 2(作るときだけ)}。
+        """
         c = self.cfg
         image = v2.functional.to_image(image)  # (3, H, W) の uint8
         if c.share_color_jitter:
@@ -128,7 +142,15 @@ class BlockMaskGenerator:
         self.log_aspect = (math.log(min_aspect), math.log(1 / min_aspect))
 
     def _add_block(self, mask: np.ndarray, limit: int) -> int:
-        """かたまりを 1 つ足す(最大 10 回試す)。Returns: 新しく隠したパッチの数。"""
+        """隠すかたまりを 1 つ足す(最大 10 回試す)。
+
+        Args:
+            mask: 隠すパッチの地図 (h, w) の bool(その場で書き換える)。
+            limit: かたまりの面積の上限(パッチの数)。
+
+        Returns:
+            新しく隠したパッチの数。
+        """
         for _ in range(10):
             area = random.uniform(self.min_patches, limit)
             aspect = math.exp(random.uniform(*self.log_aspect))
@@ -143,7 +165,14 @@ class BlockMaskGenerator:
         return 0
 
     def __call__(self, n: int) -> np.ndarray:
-        """Returns: (h, w) の bool。n 個のパッチを隠す(かたまりで足りない分はランダムな位置)。"""
+        """n 個のパッチを隠す地図を作る(かたまりで足りない分はランダムな位置)。
+
+        Args:
+            n: 隠すパッチの数。
+
+        Returns:
+            (h, w) の bool。
+        """
         mask = np.zeros((self.h, self.w), dtype=bool)
         count = 0
         while count < n:
@@ -172,9 +201,16 @@ class DINOCollate:
         self.gen, self.ratio, self.prob, self.shift = mask_generator, mask_ratio, mask_probability, random_circular_shift
 
     def __call__(self, samples: list[dict]) -> dict:
-        """Returns: {"global_crops": (2·B, 3, G, G)(1 枚目の B 枚、2 枚目の B 枚の順), "global_crops_teacher": 同じ形,
-        "local_crops": (n·B, 3, L, L), "gram_teacher_crops": (2·B, 3, R, R)(あれば), "masks": (2·B, N) の bool,
-        "mask_indices": 隠したパッチの (2·B·N の中の)番号, "masks_weight": 隠したパッチごとの重み(その切り抜きの隠した数の逆数)}。"""
+        """サンプルの切り抜きをまとめ、隠すパッチの地図を作る。
+
+        Args:
+            samples: MultiCropAugmentation の出力の並び(B 個)。
+
+        Returns:
+            {"global_crops": (2·B, 3, G, G)(1 枚目の B 枚、2 枚目の B 枚の順), "global_crops_teacher": 同じ形,
+             "local_crops": (n·B, 3, L, L), "gram_teacher_crops": (2·B, 3, R, R)(あれば), "masks": (2·B, N) の bool,
+             "mask_indices": 隠したパッチの (2·B·N の中の)番号, "masks_weight": 隠したパッチごとの重み(その切り抜きの隠した数の逆数)}。
+        """
         stack = lambda key, n: torch.stack([s[key][i] for i in range(n) for s in samples])  # 切り抜きの番号ごとに B 枚ずつ並べる
         out = {"global_crops": stack("global_crops", 2), "global_crops_teacher": stack("global_crops_teacher", 2),
                "local_crops": stack("local_crops", len(samples[0]["local_crops"]))}

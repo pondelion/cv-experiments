@@ -41,9 +41,22 @@ class ChannelsFirst(nn.Module):
         self.pretrained_cfg = model.pretrained_cfg
 
     def set_grad_checkpointing(self, enable: bool = True) -> None:
+        """包んだモデルの gradient checkpointing を切り替える。
+
+        Args:
+            enable: 使うか。
+        """
         self.model.set_grad_checkpointing(enable)
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """段ごとの特徴を (B, C, h, w) の並びで出す。
+
+        Args:
+            x: (B, 3, H, W)。
+
+        Returns:
+            段ごとの (B, C, h, w)。
+        """
         return [rearrange(f, "b h w c -> b c h w") for f in self.model(x)]  # 各段 (B, h, w, C) -> (B, C, h, w)
 
 

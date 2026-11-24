@@ -90,7 +90,8 @@ class YOLOCriterion(nn.Module):
             head: YOLOSeg の Head の出力。
             out: YOLOSeg.forward の返り値(anchors・strides・protos を使う)。
             tg: 画像ごとの {"boxes": (T, 4) 画素の xyxy, "labels": (T,), "masks": (T, S/4, S/4) float}。
-            topk, topk2: assign の引数。
+            topk: assign の topk。
+            topk2: assign の topk2。
 
         Returns:
             {"cls", "box", "l1", "mask"}(どれも 0 次元)。

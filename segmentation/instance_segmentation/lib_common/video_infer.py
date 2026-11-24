@@ -32,6 +32,8 @@ def video_predictions(logits: torch.Tensor, masks: torch.Tensor, video_id: int, 
         valid_size: 入力の中の画像の部分の (縦, 横)(残りは埋めた部分)。
         orig_size: 元の (H, W)。
         top_k: 動画ごとに残す (クエリ, クラス) の組の数。
+        activation: クラスの値の付け方("softmax": フレームで平均してから softmax / "sigmoid": 平均してから sigmoid。
+            GTR 系の画像のモデルを使う方式)。
 
     Returns:
         [{"video_id", "category_id", "score", "segmentations": [フレームごとの RLE または None], "query"}]。

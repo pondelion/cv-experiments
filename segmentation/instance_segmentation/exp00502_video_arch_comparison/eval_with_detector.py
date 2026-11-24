@@ -28,7 +28,14 @@ from segmentation.instance_segmentation.lib_common.video_train import evaluate_v
 
 
 def load_sam2(path: str) -> SAM2:
-    """SAM 2 の学習(train.py --arch sam2)の重みを、同じ場所の config.json の backbone・入力の大きさで作って読む。"""
+    """SAM 2 の学習(train.py --arch sam2)の重みを、同じ場所の config.json の backbone・入力の大きさで作って読む。
+
+    Args:
+        path: 学習の重み(runs/{名前}/best.pt)。
+
+    Returns:
+        重みを読んだ SAM2。
+    """
     cfg = json.loads((Path(path).parent / "config.json").read_text())
     model = SAM2(cfg["backbone"], cfg["size"], pretrained=False)
     model.load_state_dict(torch.load(path, map_location="cpu"))
@@ -36,7 +43,14 @@ def load_sam2(path: str) -> SAM2:
 
 
 def load_deva(path: str):
-    """DEVA の学習(train.py --arch deva)の重みを、同じ場所の config.json の backbone・入力の大きさで作って読む。"""
+    """DEVA の学習(train.py --arch deva)の重みを、同じ場所の config.json の backbone・入力の大きさで作って読む。
+
+    Args:
+        path: 学習の重み(runs/{名前}/best.pt)。
+
+    Returns:
+        重みを読んだ DEVA の伝搬のネットワーク。
+    """
     from segmentation.instance_segmentation.lib_common.models.video.deva.network import DEVA
     cfg = json.loads((Path(path).parent / "config.json").read_text())
     model = DEVA(cfg["backbone"], cfg["size"], pretrained=False)
@@ -45,6 +59,7 @@ def load_deva(path: str):
 
 
 def main() -> None:
+    """伝搬と画像のモデルを読み、選んだ組み立て(SAM 3 型か DEVA)で各セットを評価して保存する。"""
     p = argparse.ArgumentParser()
     p.add_argument("--name", required=True)
     p.add_argument("--method", choices=["sam3", "deva"], required=True)
@@ -55,7 +70,7 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=4)
     a = p.parse_args()
     torch.cuda.set_per_process_memory_fraction(a.max_vram_gb * 2**30 / torch.cuda.get_device_properties(0).total_memory)
-    detector = ImageSegmenter.from_run(a.detector)
+    detector = ImageSegmenter.from_run(a.detector, a.sets[0])  # 評価の動画のセットはどれも同じクラスの並び
     if a.method == "sam3":
         model = SAM3StyleVIS(load_sam2(a.propagator), detector).cuda().eval()
     else:

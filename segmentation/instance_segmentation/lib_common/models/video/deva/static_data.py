@@ -43,7 +43,14 @@ def random_tps_warp(img: np.ndarray, mask: np.ndarray, rng: np.random.Generator)
     公式(thinplate パッケージ)と同じく、出力の各画素の座標から元の画像の座標へのずれを、ずらした後の点で 0 次 + 1 次の多項式 +
     r² log r の基底(平滑化なし)で補間し、cv2.remap で画像は bilinear、マスクは nearest で読み出す。補間は scipy の
     RBFInterpolator(kernel="thin_plate_spline"、degree=1)を使う(同じ補間の式)。
-    Args: img (S, S, 3) の uint8、mask (S, S) の uint8。
+
+    Args:
+        img: (S, S, 3) の uint8。
+        mask: (S, S) の uint8。
+        rng: 乱数。
+
+    Returns:
+        (歪めた画像 (S, S, 3), 歪めたマスク (S, S))。
     """
     h, w = mask.shape
     src = np.stack([rng.choice(w, TPS_POINTS, replace=False) / w, rng.choice(h, TPS_POINTS, replace=False) / h], 1)  # (12, 2) の (x, y)
@@ -58,7 +65,11 @@ def random_tps_warp(img: np.ndarray, mask: np.ndarray, rng: np.random.Generator)
 
 
 def _reseed(seed: int) -> None:
-    """公式の reseed: torchvision の変換が使う乱数(random と torch)を同じ種にして、画像とマスクに同じ変換をかける。"""
+    """torchvision の変換が使う乱数(random と torch)を同じ種にする(公式の reseed。画像とマスクに同じ変換をかけるため)。
+
+    Args:
+        seed: 乱数の種。
+    """
     random.seed(seed)
     torch.manual_seed(seed)
 
@@ -101,13 +112,31 @@ class StaticPseudoVideoDataset(Dataset):
                                                transforms.RandomHorizontalFlip()])
 
     def set_epoch(self, epoch: int) -> None:
+        """エポックごとに選ぶフレーム・物体・変換を変える。
+
+        Args:
+            epoch: エポックの番号。
+        """
         self.epoch = epoch
 
     def __len__(self) -> int:
+        """1 エポックのサンプルの数(動画の数)を返す。
+
+        Returns:
+            動画の数。
+        """
         return len(self.videos)
 
     def _pick(self, v: dict, rng: np.random.Generator) -> tuple[int, dict] | None:
-        """物体が写っているフレームを無作為に 1 枚、そこに写る物体を無作為に 1 個選ぶ。"""
+        """物体が写っているフレームを無作為に 1 枚、そこに写る物体を無作為に 1 個選ぶ。
+
+        Args:
+            v: 動画の情報。
+            rng: 乱数。
+
+        Returns:
+            (フレームの番号, 物体の annotation) か None(物体のない動画)。
+        """
         anns = self.anns[v["id"]]
         frames = [f for f in range(v["length"]) if any(a["segmentations"][f] for a in anns)]
         if not frames:
@@ -116,6 +145,14 @@ class StaticPseudoVideoDataset(Dataset):
         return f, anns[int(rng.choice([k for k, a in enumerate(anns) if a["segmentations"][f]]))]
 
     def __getitem__(self, i: int) -> dict:
+        """i 番目の動画から 1 枚・1 物体を選び、3 フレームの疑似の動画を作る。
+
+        Args:
+            i: 動画の番号。
+
+        Returns:
+            {"images": (T, 3, S, S), "labels": (1,), "masks": (1, T, S, S) の bool, "video_id"}(物体のない動画は物体 0 個)。
+        """
         rng = np.random.default_rng(abs(hash((self.seed, self.epoch, i))))
         v = self.videos[i]
         picked = self._pick(v, rng)

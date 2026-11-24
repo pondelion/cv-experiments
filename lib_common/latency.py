@@ -20,14 +20,22 @@ class Timer:
     """
 
     def __enter__(self):
-        """GPU の処理の終わりを待ってから、測り始める。"""
+        """GPU の処理の終わりを待ってから、測り始める。
+
+        Returns:
+            self。
+        """
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         self._start = time.perf_counter()
         return self
 
     def __exit__(self, *exc):
-        """GPU の処理の終わりを待ってから、経過時間を self.ms に入れる。"""
+        """GPU の処理の終わりを待ってから、経過時間を self.ms に入れる。
+
+        Args:
+            *exc: with の中で起きた例外の情報(使わない)。
+        """
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         self.ms = (time.perf_counter() - self._start) * 1000

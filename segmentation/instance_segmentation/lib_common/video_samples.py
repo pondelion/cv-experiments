@@ -20,7 +20,14 @@ from PIL import Image
 from lib_common import DATASETS_DIR
 
 def _colors(n: int) -> np.ndarray:
-    """互いに違う n 色(RGB の uint8)。色相を黄金比ずつずらして作るので、何色でも重ならず、隣どうしの番号の色も離れる。"""
+    """互いに違う n 色を作る(色相を黄金比ずつずらすので、何色でも重ならず、隣どうしの番号の色も離れる)。
+
+    Args:
+        n: 色の数。
+
+    Returns:
+        (n, 3) の RGB の uint8。
+    """
     hsv = np.array([[int(180 * ((i * 0.618034) % 1.0)), 200, 240] for i in range(max(n, 1))], np.uint8)[None]  # OpenCV の H は 0〜179
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)[0]
 
@@ -57,7 +64,14 @@ def _draw(img: np.ndarray, objs: list[tuple[np.ndarray, dict, str]], t: int) -> 
 
 
 def _put_labels(img: np.ndarray, labels: list, scale: float, dx: int) -> None:
-    """縮めた後の画像に、物体の色の帯の上に白い文字で書く(scale: 元の画素 → 縮めた画素の倍率、dx: 横のずれ)。"""
+    """縮めた後の画像に、物体の色の帯の上に白い文字で書く。
+
+    Args:
+        img: 縮めた後の画像 (h, w, 3)(その場で書く)。
+        labels: (文字, 色, 元の画素での中心 (cy, cx)) の並び。
+        scale: 元の画素 → 縮めた画素の倍率。
+        dx: 横のずれ(画素)。
+    """
     font, fs, th = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
     for text, color, (cy, cx) in labels:
         x, y = int(cx * scale) + dx, int(cy * scale)
@@ -69,7 +83,13 @@ def _put_labels(img: np.ndarray, labels: list, scale: float, dx: int) -> None:
 
 
 def _write_mp4(frames: list[np.ndarray], path: Path, fps: int) -> None:
-    """フレーム(RGB、同じ大きさ)を mp4 に書く。ffmpeg があれば H.264(ブラウザ・エディタで再生できる)、なければ cv2 の mp4v。"""
+    """フレームを mp4 に書く(ffmpeg があれば H.264(ブラウザ・エディタで再生できる)、なければ cv2 の mp4v)。
+
+    Args:
+        frames: RGB のフレーム(同じ大きさ)の並び。
+        path: 書くファイル。
+        fps: フレームの速さ。
+    """
     h, w = frames[0].shape[:2]
     if shutil.which("ffmpeg"):
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps),

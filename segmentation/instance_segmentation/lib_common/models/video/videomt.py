@@ -78,14 +78,18 @@ class VidEoMT(nn.Module):
         self.upscale = nn.Sequential(*[ScaleBlock(c) for _ in range(max(1, int(math.log2(patch)) - 2))])  # 1/16 → 1/4
 
     def _predict(self, x: torch.Tensor, hw: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
-        """クエリと画像のトークンから、クラスの値とマスクの値を出す。
+        """ViT の層の出力から、クエリごとのクラスの予測とマスクの予測を作る。
+
+        入力の並びの先頭 Q 個がクエリ、その後ろに ViT の先頭のトークン(クラスのトークンなど)P 個、画像のパッチのトークン N 個が続く。
+        クラスはクエリを全結合の層に通して出す。マスクは、クエリを MLP に通したベクトルと、パッチのトークンを入力の 1/4 の大きさまで
+        拡大した特徴との内積で出す(EoMT と同じ)。
 
         Args:
-            x: (B, Q + P + N, C)。
-            hw: パッチの (h, w)。
+            x: ViT の層の出力 (B, Q + P + N, C)。
+            hw: パッチの縦・横の数 (h, w)。
 
         Returns:
-            (クラスの値 (B, Q, K+1), マスクの値 (B, Q, 4h, 4w))。
+            (クラスの値 (B, Q, K+1)(最後が「物体なし」), マスクの値 (B, Q, 4h, 4w)(sigmoid の前))。
         """
         q = x[:, : self.num_queries]  # (B, Q, C)
         img = rearrange(x[:, self.num_queries + self.vit.num_prefix_tokens:], "b (h w) c -> b c h w", h=hw[0])  # (B, C, h, w)
@@ -93,13 +97,17 @@ class VidEoMT(nn.Module):
         return self.class_head(q), masks
 
     def frame_tokens(self, frames: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int]]:
-        """最初の L1 層まで(フレームごとに独立)。
+        """フレームを ViT の前半の層に通し、画像のトークンにする。
+
+        VidEoMT は ViT の層を 2 つに分けて使う。前半の層(全体の層の数 − num_blocks 個。論文の L1)は、クエリを入れずに、フレームを
+        1 枚ずつ独立に処理する。この関数はその前半を受け持つ。フレームどうしのやり取りがないので、複数のフレームをまとめて処理できる。
+        後半の層は step が受け持つ。
 
         Args:
-            frames: (M(フレームの数), 3, S, S)。
+            frames: フレームの画像 (M(フレームの数), 3, S, S)。
 
         Returns:
-            (画像のトークン (M, P + N, C), パッチの (h, w))。
+            (前半の層の出力のトークン (M, P + N, C)(先頭のトークン P 個 + パッチのトークン N 個), パッチの縦・横の数 (h, w))。
         """
         v = self.vit
         x = v.patch_embed(frames)  # (M, N, C) か (M, h, w, C)(dynamic_img_size のとき)
@@ -114,19 +122,38 @@ class VidEoMT(nn.Module):
         return x, hw
 
     def _rope(self, hw: tuple[int, int]) -> torch.Tensor | None:
-        """RoPE の ViT のとき、パッチの格子 hw の RoPE の値 (h·w, d)。"""
+        """後半の層に渡す、パッチの位置の情報(RoPE)を作る。
+
+        DINOv3 の ViT(timm の Eva)は、位置の情報を足し算の埋め込みではなく、各層の注意の中でパッチのトークンに回転(RoPE)をかけて
+        入れる。後半の層を自分で呼ぶときにも、その回転の値を層に渡す必要があるので、パッチの格子の大きさから作る。
+
+        Args:
+            hw: パッチの縦・横の数 (h, w)。
+
+        Returns:
+            RoPE の値 (h·w, d)。RoPE を使わない ViT なら None。
+        """
         return self.vit.rope.get_embed(shape=list(hw)) if self.rope else None
 
     def step(self, tokens: torch.Tensor, hw: tuple[int, int], prev: torch.Tensor | None) -> tuple[list, torch.Tensor]:
-        """1 フレームの最後の L2 層(クエリと一緒に処理する)。
+        """1 フレーム分の、ViT の後半の層の処理と予測を行い、次のフレームに渡すクエリを返す。
+
+        ViT の後半の層(最後の num_blocks 個。論文の L2)では、クエリ(物体を表すベクトル Q 個)を、前半の層の出力のトークンの前に
+        つなげて一緒に処理する。注意の中で、クエリが画像のトークンから物体の情報を集める。クエリの作り方は次の通り(公式と同じ):
+            - 動画の最初のフレーム(prev が None): 学習するクエリ q をそのまま使う
+            - 2 フレーム目から: 前のフレームの最後の層の出力のクエリを全結合の層(query_updater)に通し、学習するクエリ q に足す
+        前のフレームと同じ番号のクエリが、同じ物体を追う(クエリの番号が物体の ID になる)。最後の層の出力のクエリを、次のフレームに
+        渡す。学習のときは、各層に入る前の値からも予測を作る(途中の層にもかける補助の損失のため)。
 
         Args:
-            tokens: frame_tokens の出力 (B, P + N, C)。
-            hw: パッチの (h, w)。
-            prev: 前のフレームから渡すクエリ (B, Q, C)(最初のフレームは None。学習するクエリ q だけを使う)。
+            tokens: このフレームの、frame_tokens の出力 (B, P + N, C)。
+            hw: パッチの縦・横の数 (h, w)。
+            prev: 前のフレームから渡すクエリ (B, Q, C)。動画の最初のフレームでは None。
 
         Returns:
-            (予測の並び [(クラスの値, マスクの値)](学習は各層の前 + 最後の層、推論は最後の層だけ), 次のフレームに渡すクエリ (B, Q, C))。
+            (予測の並び [(クラスの値 (B, Q, K+1), マスクの値 (B, Q, 4h, 4w))]。学習のときは後半の各層の前の予測と最後の層の予測、
+            推論のときは最後の層の予測だけ,
+             次のフレームに渡すクエリ (B, Q, C))。
         """
         b = tokens.shape[0]
         q = repeat(self.q.weight, "q c -> b q c", b=b)  # (B, Q, C)
@@ -145,14 +172,20 @@ class VidEoMT(nn.Module):
         return preds, norm(x)[:, : self.num_queries]  # 次のフレームへは、最後の層の出力のクエリを渡す(公式と同じ)
 
     def forward(self, clips: torch.Tensor, prev: torch.Tensor | None = None) -> tuple[list[dict], torch.Tensor]:
-        """区間を時刻の順に処理する。
+        """学習の区間(連続した数フレーム)を処理し、各フレームの予測を作る。
+
+        前半の層(frame_tokens)はフレームが独立なので、区間の全フレームをまとめて処理する。後半の層(step)は前のフレームのクエリを
+        使うので、フレームを時刻の順に 1 枚ずつ処理する。学習では、区間の最初のフレームは前のフレームのクエリなし(動画の最初と同じ)で
+        始める。
 
         Args:
-            clips: (B, T, 3, S, S)。
-            prev: 前の区間の最後のフレームから渡すクエリ (B, Q, C)(動画の最初は None。推論で動画を区間に分けて流すとき)。
+            clips: 区間の画像 (B(区間の数), T(フレームの数), 3, S, S)。
+            prev: 区間の最初のフレームに渡すクエリ (B, Q, C)。動画の最初から始めるときは None。
 
         Returns:
-            (層ごとの {"logits": (B, T, Q, K+1), "masks": (B, Q, T, 4h, 4w)}(フレームごと)の並び, 最後のフレームのクエリ (B, Q, C))。
+            (予測の並び(step の予測の並びと同じ順。学習は後半の各層の前と最後の層、推論は最後の層だけ)。各要素は
+            {"logits": クラスの値 (B, T, Q, K+1), "masks": マスクの値 (B, Q, T, 4h, 4w)},
+             区間の最後のフレームの、次に渡すクエリ (B, Q, C))。
         """
         b, t = clips.shape[:2]
         tokens, hw = self.frame_tokens(rearrange(clips, "b t c h w -> (b t) c h w"))  # 最初の L1 層はフレームをまとめて処理
@@ -170,14 +203,18 @@ class VidEoMT(nn.Module):
 
     @torch.no_grad()
     def predict_video(self, frames: torch.Tensor, chunk: int = 16) -> tuple[torch.Tensor, torch.Tensor]:
-        """1 本の動画の全フレームを、時刻の順に 1 フレームずつ処理する(online。最初の L1 層は chunk 枚ずつまとめる)。
+        """推論: 1 本の動画の全フレームの予測を作る。
+
+        動画の最初のフレームから順に、前のフレームのクエリを次のフレームに渡しながら処理する(online。未来のフレームは使わない)。
+        前半の層(frame_tokens)はフレームが独立なので、GPU のメモリに収まるように chunk 枚ずつまとめて処理し、後半の層(step)は
+        1 枚ずつ処理する。クエリの番号が動画を通した物体の ID になる。
 
         Args:
-            frames: (T, 3, S, S)。
-            chunk: 最初の L1 層をまとめて処理するフレームの数(GPU のメモリとの兼ね合い)。
+            frames: 動画の全フレームの画像 (T, 3, S, S)。
+            chunk: 前半の層でまとめて処理するフレームの数。
 
         Returns:
-            (フレームごとのクラスの値 (T, Q, K+1), フレームごとのマスクの値 (Q, T, 4h, 4w))。
+            (各フレームのクラスの値 (T, Q, K+1), 各フレームのマスクの値 (Q, T, 4h, 4w)(sigmoid の前))。
         """
         logits, masks, prev = [], [], None
         for s in range(0, len(frames), chunk):

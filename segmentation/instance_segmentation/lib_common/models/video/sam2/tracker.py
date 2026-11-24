@@ -50,7 +50,15 @@ HIGH_CONF_THRESH, IOU_THRESH_RECONDITION, SHRINK_THRESH = 0.8, 0.8, 0.3
 
 
 def mask_iou(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """2 組の 0/1 のマスクの IoU。Args: a (N, h, w)、b (M, h, w) の bool。Returns: (N, M)。"""
+    """2 組の 0/1 のマスクの IoU。
+
+    Args:
+        a: (N, h, w) の bool。
+        b: (M, h, w) の bool。
+
+    Returns:
+        (N, M)(和が 0 の組は 0)。
+    """
     a, b = a.flatten(1).float(), b.flatten(1).float()
     inter = a @ b.T
     union = a.sum(1)[:, None] + b.sum(1)[None, :] - inter
@@ -58,7 +66,17 @@ def mask_iou(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def nms_masks(scores: torch.Tensor, masks: torch.Tensor, prob_thresh: float, iou_thresh: float) -> torch.Tensor:
-    """点数 > prob_thresh の検出の、マスクの IoU での NMS(公式の nms_masks・generic_nms。IoU > 閾値を消す)。Returns: 残す (R,) の bool。"""
+    """点数 > prob_thresh の検出の、マスクの IoU での NMS(公式の nms_masks・generic_nms。IoU > 閾値を消す)。
+
+    Args:
+        scores: 検出の点数 (R,)。
+        masks: 検出のマスクの値 (R, h, w)。
+        prob_thresh: 使う検出の点数の閾値。
+        iou_thresh: 消す IoU の閾値。
+
+    Returns:
+        残す検出 (R,) の bool。
+    """
     valid = scores > prob_thresh
     keep = torch.zeros_like(valid)
     idx = torch.nonzero(valid).squeeze(-1)
@@ -76,14 +94,33 @@ def nms_masks(scores: torch.Tensor, masks: torch.Tensor, prob_thresh: float, iou
 
 
 def fill_holes_and_sprinkles(mask: torch.Tensor, max_area: int = FILL_HOLE_AREA) -> torch.Tensor:
-    """公式の SAM 3 の fill_holes_in_mask_scores: 値 ≤ 0 の連結成分で面積 ≤ max_area を 0.1 に(穴埋め)、
-    値 > 0 の連結成分で面積 ≤ min(全体の面積 // 2, max_area) を −0.1 に(小さな点を消す)。8 近傍。Args: mask (M, h, w)。"""
+    """マスクの小さな穴を埋め、小さな点を消す(公式の SAM 3 の fill_holes_in_mask_scores)。
+
+    値 ≤ 0 の連結成分で面積 ≤ max_area を 0.1 に(穴埋め)、値 > 0 の連結成分で面積 ≤ min(全体の面積 // 2, max_area) を
+    −0.1 に(小さな点を消す)。連結は 8 近傍。
+
+    Args:
+        mask: マスクの値 (M, h, w)。
+        max_area: 対象の面積の上限(画素。0 以下なら何もしない)。
+
+    Returns:
+        (M, h, w)。
+    """
     import cv2
     if max_area <= 0 or mask.numel() == 0:
         return mask
     out = mask.clone()
 
     def small(m: np.ndarray, thresh: int) -> np.ndarray:
+        """面積が thresh 以下の連結成分の画素。
+
+        Args:
+            m: (h, w) の bool。
+            thresh: 面積の上限。
+
+        Returns:
+            (h, w) の bool。
+        """
         n, labels, stats, _ = cv2.connectedComponentsWithStats(m.astype(np.uint8), connectivity=8)
         areas = stats[:, cv2.CC_STAT_AREA]
         return m & (areas[labels] <= thresh)
@@ -97,7 +134,14 @@ def fill_holes_and_sprinkles(mask: torch.Tensor, max_area: int = FILL_HOLE_AREA)
 
 
 class _Track:
-    """1 本の追跡(1 つの ID)。"""
+    """1 本の追跡(1 つの ID)。
+
+    Args:
+        oid: ID。
+        label: クラス(0 始まり)。
+        score: 始めた検出の点数。
+        first: 始めたフレームの番号。
+    """
 
     def __init__(self, oid: int, label: int, score: float, first: int):
         self.oid, self.label, self.score, self.first = oid, label, score, first
@@ -125,7 +169,9 @@ class SAM3StyleVIS(torch.nn.Module):
         """1 本の動画を処理する。
 
         Args:
-            frames: (T, 3, S, S)(評価の変換)。valid・orig: 使わない(DEVA と呼び方をそろえるため。元の大きさへは to_predictions で直す)。
+            frames: (T, 3, S, S)(評価の変換)。
+            valid: 使わない(DEVA と呼び方をそろえるため。元の大きさへは to_predictions で直す)。
+            orig: 使わない(同上)。
             chunk: 画像の特徴をまとめて作るフレームの数。
 
         Returns:
@@ -249,9 +295,15 @@ class SAM3StyleVIS(torch.nn.Module):
 
     @staticmethod
     def _associate(d_masks, d_scores, t_masks):
-        """公式の _associate_det_trk_compilable(o2o_matching なし、IoU)。
+        """検出と追跡をマスクの IoU で照合する(公式の _associate_det_trk_compilable。o2o_matching なし)。
 
-        Returns: (新しい物体にする検出の番号, 照合のない(空でない)追跡の番号, {検出: [照合した追跡]}, {追跡: 再条件付けの検出})。
+        Args:
+            d_masks: 検出のマスクの値 (N, h, w)。
+            d_scores: 検出の点数 (N,)。
+            t_masks: 追跡の伝搬したマスクの値 (M, h, w)。
+
+        Returns:
+            (新しい物体にする検出の番号, 照合のない(空でない)追跡の番号, {検出: [照合した追跡]}, {追跡: 再条件付けの検出})。
         """
         n, m = len(d_masks), len(t_masks)
         if m == 0:
@@ -281,7 +333,14 @@ class SAM3StyleVIS(torch.nn.Module):
 
     @staticmethod
     def _suppress_recent_occlusion(trk_low: torch.Tensor, trs: list[_Track], idx: list[int], t: int) -> None:
-        """公式の _suppress_overlapping_based_on_recent_occlusion(このクラスの追跡の中。trk_low をその場で書き換える)。"""
+        """重なる 2 つの追跡のうち、最近隠れた方のマスクを消す(公式の _suppress_overlapping_based_on_recent_occlusion)。
+
+        Args:
+            trk_low: 追跡の低解像度のマスクの値 (M, 1, h, w)(その場で書き換える)。
+            trs: このクラスの追跡。
+            idx: trs の各追跡の trk_low の中の番号。
+            t: 今のフレームの番号。
+        """
         if not idx:
             return
         b = trk_low[idx] > 0
@@ -302,7 +361,14 @@ class SAM3StyleVIS(torch.nn.Module):
 
     @staticmethod
     def _suppress_shrinkage(high: torch.Tensor) -> torch.Tensor:
-        """公式の _suppress_object_pw_area_shrinkage: 画素ごとに最も値の大きい物体だけを残したとき、面積が 0.3 未満に縮む物体を消す。"""
+        """画素ごとに最も値の大きい物体だけを残したとき、面積が 0.3 未満に縮む物体を消す(公式の _suppress_object_pw_area_shrinkage)。
+
+        Args:
+            high: 物体ごとのマスクの値 (M, 1, H, W)。
+
+        Returns:
+            (M, 1, H, W)(消した物体は −10 以下)。
+        """
         if high.shape[0] <= 1:
             return high
         arg = high.argmax(0, keepdim=True)
@@ -316,7 +382,20 @@ class SAM3StyleVIS(torch.nn.Module):
     @torch.no_grad()
     def to_predictions(self, tracks: list[dict], video_id: int, cat_ids: list[int], size: int, valid: tuple[int, int],
                        orig: tuple[int, int], t_all: int) -> list[dict]:
-        """ID ごとの予測を評価の形にする(公式の _postprocess_output: 空を除き、重なる画素は追跡の点数の高い物体へ。クラスごと)。"""
+        """ID ごとの予測を評価の形にする(公式の _postprocess_output: 空を除き、重なる画素は追跡の点数の高い物体へ。クラスごと)。
+
+        Args:
+            tracks: track_video の返り値。
+            video_id: 動画の ID。
+            cat_ids: クラスの番号 → カテゴリーの id。
+            size: 入力の一辺 S。
+            valid: 入力の中の画像の部分 (縦, 横)。
+            orig: 元の大きさ (縦, 横)。
+            t_all: 動画のフレームの数。
+
+        Returns:
+            評価の予測 [{"video_id", "category_id", "score", "segmentations", "query"}]。
+        """
         from pycocotools import mask as mask_util
         segs = {tr["oid"]: [None] * t_all for tr in tracks}
         for t in range(t_all):

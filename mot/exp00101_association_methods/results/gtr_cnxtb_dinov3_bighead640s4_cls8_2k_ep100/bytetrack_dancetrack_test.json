@@ -1,0 +1,54 @@
+{
+ "bytetrack_th0.5": {
+  "config": {
+   "track_thresh": 0.5,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 36.27539026462469,
+    "DetA": 55.80461004353134,
+    "AssA": 23.820826291103263,
+    "LocA": 80.77369870960877,
+    "MOTA": 67.75321122106348,
+    "IDSW": 2132.0,
+    "IDF1": 40.52048159729279
+   }
+  }
+ },
+ "bytetrack_th0.6": {
+  "config": {
+   "track_thresh": 0.6,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 36.23891730549843,
+    "DetA": 54.91809362871977,
+    "AssA": 24.1224243709314,
+    "LocA": 81.10606783013054,
+    "MOTA": 67.4076607387141,
+    "IDSW": 1899.0,
+    "IDF1": 41.114487135351965
+   }
+  }
+ }
+}

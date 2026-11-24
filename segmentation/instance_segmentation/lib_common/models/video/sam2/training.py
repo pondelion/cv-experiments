@@ -81,7 +81,17 @@ def train_forward(model: SAM2, frames: torch.Tensor, gt: torch.Tensor, rng: np.r
 
 
 def _focal(x, y, alpha: float, gamma: float):
-    """sigmoid の focal loss(要素ごと)。alpha < 0 なら重みなし。"""
+    """sigmoid の focal loss(要素ごと)。
+
+    Args:
+        x: 値(logit)。
+        y: 正解(0/1)。
+        alpha: 正例の重み(0 未満なら重みなし)。
+        gamma: 当てやすい要素を軽くする指数。
+
+    Returns:
+        x と同じ形の損失。
+    """
     p = x.sigmoid()
     ce = F.binary_cross_entropy_with_logits(x, y, reduction="none")
     loss = ce * (1 - (p * y + (1 - p) * (1 - y))) ** gamma
@@ -91,7 +101,15 @@ def _focal(x, y, alpha: float, gamma: float):
 
 
 def sam2_loss(outs: list[dict], gt: torch.Tensor) -> tuple[torch.Tensor, dict]:
-    """公式の MultiStepMultiMasksAndIous(上の損失)。Args: outs(train_forward の返り値)、gt (T, O, S, S)。"""
+    """SAM 2 の損失(公式の MultiStepMultiMasksAndIous。ファイルの先頭に書いた損失)。
+
+    Args:
+        outs: train_forward の返り値(フレームごとの出力)。
+        gt: 正解のマスク (T, O, S, S)。
+
+    Returns:
+        (損失の合計, 内訳 {"mask", "dice", "iou", "class"})。
+    """
     n_obj = max(gt.shape[1], 1)
     sums = {"mask": 0.0, "dice": 0.0, "iou": 0.0, "class": 0.0}
     for o, g in zip(outs, gt):
@@ -124,7 +142,13 @@ def sam2_loss(outs: list[dict], gt: torch.Tensor) -> tuple[torch.Tensor, dict]:
 def select_objects(masks: torch.Tensor, rng: np.random.Generator, max_objects: int = MAX_OBJECTS) -> torch.Tensor | None:
     """最初のフレームに写っている物体から最大 max_objects 個を無作為に選ぶ(公式の RandomUniformSampler)。
 
-    Args: masks (N, T, S, S)。Returns: 選んだ物体の番号 (O,) か None(最初のフレームに物体がない)。
+    Args:
+        masks: 区間の正解のマスク (N, T, S, S)。
+        rng: 乱数。
+        max_objects: 選ぶ物体の数の上限。
+
+    Returns:
+        選んだ物体の番号 (O,) か None(最初のフレームに物体がない)。
     """
     visible = torch.nonzero(masks[:, 0].flatten(1).any(-1)).squeeze(-1).tolist()
     if not visible:

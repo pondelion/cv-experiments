@@ -39,6 +39,7 @@ SIZES = {"nano": rfdetr.RFDETRSegNano, "small": rfdetr.RFDETRSegSmall, "medium":
 
 
 def main() -> None:
+    """選んだ大きさの公式の RF-DETR-Seg を評価のセットで評価し、結果を保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--size", default="nano", choices=list(SIZES))
     parser.add_argument("--set", default="coco_val_dev")

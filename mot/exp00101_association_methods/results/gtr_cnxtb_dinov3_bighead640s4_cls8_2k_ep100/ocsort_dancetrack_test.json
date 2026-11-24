@@ -1,0 +1,26 @@
+{
+ "ocsort_th0.6": {
+  "config": {
+   "det_thresh": 0.6,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 36.55358606424204,
+    "DetA": 54.69434765995326,
+    "AssA": 24.62171480958897,
+    "LocA": 85.53303924717088,
+    "MOTA": 64.23552507683836,
+    "IDSW": 1809.0,
+    "IDF1": 39.83537119726245
+   }
+  }
+ }
+}

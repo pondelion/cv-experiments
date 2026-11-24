@@ -27,11 +27,27 @@ MIN_PER_CLASS = 5
 
 
 def load(name: str) -> dict:
+    """共通の形式のセットを読む。
+
+    Args:
+        name: セットの名前。
+
+    Returns:
+        セットの dict。
+    """
     return json.loads((DATASETS_DIR / "sets" / f"{name}.json").read_text())
 
 
 def keep_cls8(d: dict, video_ids: set | None = None) -> dict:
-    """8 クラスの物体だけを残し、8 クラスのどれも写っていない動画を除く(video_ids があれば、その動画だけにする)。"""
+    """8 クラスの物体だけを残し、8 クラスのどれも写っていない動画を除く。
+
+    Args:
+        d: 共通の形式のセット。
+        video_ids: あれば、その動画だけにする。
+
+    Returns:
+        8 クラスのセット。
+    """
     cats = [c for c in d["categories"] if c["name"] in CLASSES]
     ids = {c["id"] for c in cats}
     anns = [a for a in d["annotations"] if a["category_id"] in ids]
@@ -41,7 +57,15 @@ def keep_cls8(d: dict, video_ids: set | None = None) -> dict:
 
 
 def merge(a: dict, b: dict) -> dict:
-    """2 つのセットを合わせる(どちらも id が 1 から振られているので、b の動画・物体の id を a の最大値だけずらす)。"""
+    """2 つのセットを合わせる(どちらも id が 1 から振られているので、b の動画・物体の id を a の最大値だけずらす)。
+
+    Args:
+        a: 共通の形式のセット。
+        b: 共通の形式のセット。
+
+    Returns:
+        合わせたセット。
+    """
     vo, ao = max(v["id"] for v in a["videos"]), max(x["id"] for x in a["annotations"])
     return {"videos": a["videos"] + [v | {"id": v["id"] + vo} for v in b["videos"]],
             "annotations": a["annotations"] + [x | {"id": x["id"] + ao, "video_id": x["video_id"] + vo} for x in b["annotations"]],
@@ -49,10 +73,18 @@ def merge(a: dict, b: dict) -> dict:
 
 
 def to_frames(d: dict) -> dict:
-    """動画のセットを、フレームを 1 枚の画像とした COCO 形式の画像のセットにする(画像のインスタンスセグメンテーションのモデルの
-    学習・評価用。MinVIS・DVIS の画像のモデル)。画像の id = 動画の id × 1000 + フレームの番号。
-    画像の学習のコードはクラスの id が 1〜K の連番であることを前提にする(ラベル = id − 1)ので、クラスの id を CLASSES の順に
-    1〜8 へ振り直す(動画のセットとの対応はクラス名で取る)。"""
+    """動画のセットを、フレームを 1 枚の画像とした COCO 形式の画像のセットにする。
+
+    画像のインスタンスセグメンテーションのモデル(MinVIS・DVIS の画像のモデル)の学習・評価用。画像の id = 動画の id × 1000 +
+    フレームの番号。画像の学習のコードはクラスの id が 1〜K の連番であることを前提にする(ラベル = id − 1)ので、クラスの id を
+    CLASSES の順に 1〜8 へ振り直す(動画のセットとの対応はクラス名で取る)。
+
+    Args:
+        d: 共通の形式の動画のセット。
+
+    Returns:
+        COCO 形式の画像のセット。
+    """
     new_id = {c["id"]: CLASSES.index(c["name"]) + 1 for c in d["categories"]}
     images, anns = [], []
     for v in d["videos"]:
@@ -69,6 +101,7 @@ def to_frames(d: dict) -> dict:
 
 
 def main() -> None:
+    """8 クラスの動画のセット(train・dev・val)と、フレームの画像のセットを作って保存する。"""
     pool = keep_cls8(merge(load("vipseg_vis_train"), load("vipseg_vis_dev")))  # 公式の train(元の train + 元の dev)
     name_of = {c["id"]: c["name"] for c in pool["categories"]}
     videos_of = {n: set() for n in CLASSES}

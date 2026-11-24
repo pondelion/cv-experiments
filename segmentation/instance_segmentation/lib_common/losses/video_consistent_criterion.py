@@ -42,9 +42,13 @@ class VideoConsistentCriterion(Mask2FormerCriterion):
         Args:
             logits: フレームごとのクラスの値 (B·T, Q, K+1)。
             masks: フレームごとのマスクの値 (B·T, Q, h, w)。
-            labels・tmasks・owner・starts: フレームを画像とみなしてつなげた正解(forward の中で作る)。
+            labels: フレームを画像とみなしてつなげた正解のクラス(forward の中で作る)。
+            tmasks: 同じ順の正解のマスク。
+            owner: 正解の物体がどのフレーム(画像)のものか。
+            starts: フレームごとの、つなげた正解の中での先頭の番号。
             num_frames: T。
             counts: 区間ごとの正解の物体の数 N(長さ B)。
+            activation: クラスの値の付け方("softmax" か "sigmoid"。match_cost と同じ)。
 
         Returns:
             フレームごとの [(クエリの番号, そのフレームの中での正解の番号)](長さ B·T。同じ区間のフレームは同じ組)。

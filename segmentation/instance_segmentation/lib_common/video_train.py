@@ -52,6 +52,8 @@ class VideoTrainConfig:
     size: int = 512
     clip_len: int = 5
     frame_range: int = 2
+    frame_skip_p: float = 0.0  # 0 より大きいと、区間をフレームの間引きのデータ拡張つきで選ぶ(video_data.sample_clip_skip)
+    frame_skip_random_p: float = 0.0  # 間引きのうち、等間隔の代わりに無作為に選ぶ確率
     batch_size: int = 8  # 1 回の optimizer step あたりの区間の数
     grad_accum: int = 1  # gradient accumulation steps(micro-batch size = batch_size / grad_accum)
     steps: int = 40000
@@ -93,7 +95,15 @@ class VideoTrainConfig:
 
 
 def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Module:
-    """方式に合わせてモデルを作る。"""
+    """方式に合わせてモデルを作る。
+
+    Args:
+        cfg: 学習の設定(arch で方式を選ぶ)。
+        num_classes: クラスの数。
+
+    Returns:
+        モデル。
+    """
     if cfg.arch == "videomt":
         from segmentation.instance_segmentation.lib_common.models.video.videomt import VidEoMT
         return VidEoMT(num_classes, cfg.backbone, cfg.num_queries, cfg.num_blocks, cfg.size, init_weights=cfg.init_weights,
@@ -118,7 +128,9 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
         from segmentation.instance_segmentation.lib_common.models.video.dvis import DVISOnline, load_segmenter
         from segmentation.instance_segmentation.lib_common.models.video.image_adapter import ImageSegmenter
         seg_arch = json.loads((Path(cfg.segmenter).parent / "config.json").read_text()).get("arch")
-        segmenter = ImageSegmenter.from_run(cfg.segmenter) if seg_arch == "gtr_seg" else load_segmenter(cfg.segmenter)
+        # どちらも出力のクラスの番号を、学習の動画のセットの並びにそろえる(画像のセットと並びが違うことがある)
+        segmenter = ImageSegmenter.from_run(cfg.segmenter, cfg.train_set) if seg_arch == "gtr_seg" else \
+            load_segmenter(cfg.segmenter, cfg.train_set)
         return DVISOnline(segmenter, num_classes, cfg.tracker_layers)
     if cfg.arch == "deva":  # DEVA の伝搬のネットワーク(クラスによらない。画素の encoder の幹は exp の backbone)
         from segmentation.instance_segmentation.lib_common.models.video.deva.network import DEVA
@@ -131,7 +143,8 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
         from segmentation.instance_segmentation.lib_common.models.video.dvis_daq import DVISDAQOnline
         from segmentation.instance_segmentation.lib_common.models.video.dvis_plus import load_ctvis_segmenter
         seg_cfg = json.loads((Path(cfg.segmenter).parent / "config.json").read_text())
-        segmenter = load_ctvis_segmenter(cfg.segmenter) if seg_cfg.get("arch") == "ctvis" else load_segmenter(cfg.segmenter)
+        segmenter = load_ctvis_segmenter(cfg.segmenter) if seg_cfg.get("arch") == "ctvis" else \
+            load_segmenter(cfg.segmenter, cfg.train_set)
         return DVISDAQOnline(segmenter, num_classes, cfg.daq_first_stage_frac)
     if cfg.arch == "dvis_plus":  # 学習済みの CTVIS の Mask2Former(arch="ctvis" の学習の best.pt)を固定し、DVIS++ の追跡の部を学習する
         from segmentation.instance_segmentation.lib_common.models.video.dvis_plus import DVISPlusOnline, load_ctvis_segmenter
@@ -140,9 +153,20 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
 
 
 def build_video_optimizer(model: torch.nn.Module, cfg: VideoTrainConfig) -> torch.optim.Optimizer:
-    """AdamW。ViT の i 番目の層は lr × llrd^(層の数 − 1 − i)、層より前(埋め込み)は最初の層と同じ、ViT の最後の LayerNorm と
-    ほかの部分は lr(公式の EoMT・VidEoMT と同じ)。weight decay は全部の重みにかける。backbone の組は 2 段の warmup の対象。
-    DVIS(ViT を学習しない)は、学習する重み(追跡の部)を全部 lr・weight decay で 1 組にする(公式の DVIS と同じ AdamW)。"""
+    """方式に合わせて optimizer を作る。
+
+    既定(VidEoMT)は AdamW。ViT の i 番目の層は lr × llrd^(層の数 − 1 − i)、層より前(埋め込み)は最初の層と同じ、ViT の最後の
+    LayerNorm とほかの部分は lr(公式の EoMT・VidEoMT と同じ)。weight decay は全部の重みにかける。backbone の組は 2 段の warmup の
+    対象。DVIS など(ViT を学習しない)は、学習する重み(追跡の部)を全部 lr・weight decay で 1 組にする(公式の DVIS と同じ AdamW)。
+    SAM 2・CTVIS・CAVIS の segmenter・MaskTrack R-CNN は、下の分岐のそれぞれの公式の分け方。
+
+    Args:
+        model: モデル。
+        cfg: 学習の設定。
+
+    Returns:
+        optimizer。
+    """
     if cfg.arch == "sam2":  # 公式の SAM 2 の学習の分け方: image_encoder.*(幹と neck)は lr × backbone_lr_mult(公式の vision_lr)、
         # 幹の ViT の層は層ごとの減衰 0.9(i 番目の層は 0.9^(層の数 − i)、埋め込みは 0.9^(層の数 + 1)、pos_embed は減衰なし)、
         # weight decay は bias と LayerNorm の重みだけ 0
@@ -187,7 +211,8 @@ def build_video_optimizer(model: torch.nn.Module, cfg: VideoTrainConfig) -> torc
 
 
 @torch.no_grad()
-def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfig, limit: int | None = None) -> dict:
+def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfig, limit: int | None = None,
+                       class_names: list[str] | None = None) -> dict:
     """セットの動画を推論して、動画の AP を計算する。
 
     Args:
@@ -195,6 +220,8 @@ def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainCon
         set_name: 共通の形式のセットの名前。
         cfg: 学習の設定(入力の大きさ・top_k)。
         limit: 先頭のこの本数だけ評価する(None なら全部)。
+        class_names: モデルのクラスの番号の順のクラスの名前(None ならモデルのクラスの並び = このセットの categories の並び)。
+            画像のセットで学習したモデル(学習中の MinVIS の評価)は並びが違うことがあるので、名前でカテゴリーの id に対応させる。
 
     Returns:
         evaluate_vis の結果(動画の AP)+ evaluate_frames の結果(画像 AP: image_AP など)+ {"n_videos", "s_per_video"}。
@@ -207,6 +234,9 @@ def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainCon
         gt = {**gt, "videos": [v for v in gt["videos"] if v["id"] in keep],
               "annotations": [a for a in gt["annotations"] if a["video_id"] in keep]}
     cat_ids = [c["id"] for c in gt["categories"]]
+    if class_names is not None:
+        by_name = {c["name"]: c["id"] for c in gt["categories"]}
+        cat_ids = [by_name[n] for n in class_names]
     ds = VideoEvalDataset(set_name, cfg.size)
     order = [i for i, v in enumerate(ds.videos) if limit is None or v["id"] in keep]
     loader = DataLoader(torch.utils.data.Subset(ds, order), batch_size=None, num_workers=min(cfg.workers, 4))
@@ -232,7 +262,13 @@ def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainCon
 
 @torch.no_grad()
 def evaluate_vos_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfig, limit: int | None = None) -> dict:
-    """マスクを与えて追う方式(SAM 2)の伝搬だけの出来を J&F で測る(物体が初めて写ったフレームで正解のマスクを与える)。
+    """マスクを与えて追う方式(SAM 2・DEVA)の伝搬だけの出来を J&F で測る(物体が初めて写ったフレームで正解のマスクを与える)。
+
+    Args:
+        model: SAM2 か DEVA の伝搬のネットワーク。
+        set_name: 動画のセットの名前。
+        cfg: 学習の設定(入力の大きさなど)。
+        limit: 先頭のこの本数だけ測る(None なら全部)。
 
     Returns:
         video_eval.evaluate_jf の結果 + {"n_videos", "s_per_video"}。
@@ -297,7 +333,14 @@ def _timestamp(t0: float) -> dict:
 
 
 def train_video(cfg: VideoTrainConfig) -> dict:
-    """学習して、最後に eval_sets で評価し、results/{名前}.json に保存する。"""
+    """学習して、最後に eval_sets で評価し、results/{名前}.json に保存する。
+
+    Args:
+        cfg: 学習の設定。
+
+    Returns:
+        保存した結果(設定・途中の評価の記録・最後の評価)。
+    """
     torch.manual_seed(cfg.seed); random.seed(cfg.seed); np.random.seed(cfg.seed)
     torch.backends.cudnn.benchmark = True
     if cfg.max_vram_gb:
@@ -305,7 +348,8 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     out_dir, res_dir = Path(cfg.out_dir) / cfg.name, Path(cfg.results_dir)
     out_dir.mkdir(parents=True, exist_ok=True); res_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=1, ensure_ascii=False))
-    ds = VideoClipDataset(cfg.train_set, cfg.clip_len, cfg.frame_range, cfg.size, cfg.seed)
+    ds = VideoClipDataset(cfg.train_set, cfg.clip_len, cfg.frame_range, cfg.size, cfg.seed, cfg.frame_skip_p,
+                          cfg.frame_skip_random_p)
     num_classes = len(ds.cat_ids)
     deva_s0 = cfg.arch == "deva" and cfg.deva_stage == 0
     if deva_s0:  # DEVA の静止画の段階: 学習のセットのフレーム 1 枚 + 物体 1 個から 3 フレームを作る(deva/static_data.py)

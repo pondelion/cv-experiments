@@ -1,0 +1,365 @@
+{
+ "ocsort_th0.15": {
+  "config": {
+   "det_thresh": 0.15,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 29.803342564480705,
+    "DetA": 35.271441991465906,
+    "AssA": 26.819908902986857,
+    "LocA": 74.94106790637566,
+    "MOTA": 17.512348450830714,
+    "IDSW": 459.0,
+    "IDF1": 35.381316998468606
+   },
+   "pedestrian": {
+    "HOTA": 8.284806910019899,
+    "DetA": 5.067632430698475,
+    "AssA": 13.564737105647842,
+    "LocA": 69.5186364578368,
+    "MOTA": -149.19786096256684,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.2": {
+  "config": {
+   "det_thresh": 0.2,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 32.32996505969908,
+    "DetA": 36.39292512351538,
+    "AssA": 30.641968073969107,
+    "LocA": 74.97497846692016,
+    "MOTA": 22.171082173327346,
+    "IDSW": 409.0,
+    "IDF1": 38.68312757201646
+   },
+   "pedestrian": {
+    "HOTA": 8.407940718809092,
+    "DetA": 5.047971624486293,
+    "AssA": 14.025937635739,
+    "LocA": 69.46045107345029,
+    "MOTA": -129.41176470588235,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.3": {
+  "config": {
+   "det_thresh": 0.3,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 33.71988593635768,
+    "DetA": 37.763558569743374,
+    "AssA": 31.990068444033533,
+    "LocA": 75.09393719061696,
+    "MOTA": 27.817691962281092,
+    "IDSW": 348.0,
+    "IDF1": 40.80540333885561
+   },
+   "pedestrian": {
+    "HOTA": 8.881977433219905,
+    "DetA": 5.25962770951527,
+    "AssA": 15.024520336806987,
+    "LocA": 67.35010695074361,
+    "MOTA": -102.67379679144386,
+    "IDSW": 0.0,
+    "IDF1": 0.5249343832020997
+   }
+  }
+ },
+ "ocsort_th0.4": {
+  "config": {
+   "det_thresh": 0.4,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 34.209948427740265,
+    "DetA": 38.042951822619216,
+    "AssA": 32.53584252770109,
+    "LocA": 75.20134680619223,
+    "MOTA": 30.39964077233947,
+    "IDSW": 296.0,
+    "IDF1": 42.14137752459865
+   },
+   "pedestrian": {
+    "HOTA": 8.901279720553127,
+    "DetA": 5.398951358888508,
+    "AssA": 14.695617811805771,
+    "LocA": 67.21355149973436,
+    "MOTA": -95.18716577540107,
+    "IDSW": 0.0,
+    "IDF1": 0.544959128065395
+   }
+  }
+ },
+ "ocsort_th0.5": {
+  "config": {
+   "det_thresh": 0.5,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 35.40227725014435,
+    "DetA": 38.32894167705549,
+    "AssA": 34.30936866073549,
+    "LocA": 75.24401421448665,
+    "MOTA": 31.746744499326446,
+    "IDSW": 295.0,
+    "IDF1": 44.49820202680614
+   },
+   "pedestrian": {
+    "HOTA": 9.006076123482961,
+    "DetA": 5.387438033210784,
+    "AssA": 15.077333613561205,
+    "LocA": 69.26643713969109,
+    "MOTA": -90.37433155080214,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.6": {
+  "config": {
+   "det_thresh": 0.6,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 35.39489031814508,
+    "DetA": 38.812404752813954,
+    "AssA": 33.852547643250965,
+    "LocA": 75.31944800670597,
+    "MOTA": 34.00314324202964,
+    "IDSW": 248.0,
+    "IDF1": 44.56600540433665
+   },
+   "pedestrian": {
+    "HOTA": 8.898230111811726,
+    "DetA": 5.179288627322912,
+    "AssA": 15.309691871996964,
+    "LocA": 69.32317883617955,
+    "MOTA": -93.04812834224599,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.7": {
+  "config": {
+   "det_thresh": 0.7,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 35.636279635189965,
+    "DetA": 38.93953380792286,
+    "AssA": 34.12233782404344,
+    "LocA": 75.43595331567538,
+    "MOTA": 35.15940727436013,
+    "IDSW": 239.0,
+    "IDF1": 45.697604989053275
+   },
+   "pedestrian": {
+    "HOTA": 9.154907665799044,
+    "DetA": 5.455264801456215,
+    "AssA": 15.394951304200935,
+    "LocA": 69.3002779853392,
+    "MOTA": -83.42245989304813,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.8": {
+  "config": {
+   "det_thresh": 0.8,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 36.37664474688505,
+    "DetA": 38.87099985346769,
+    "AssA": 35.44448618509618,
+    "LocA": 75.57880600739517,
+    "MOTA": 36.5626403233049,
+    "IDSW": 188.0,
+    "IDF1": 46.98932671007585
+   },
+   "pedestrian": {
+    "HOTA": 9.170346858285088,
+    "DetA": 5.227048556336458,
+    "AssA": 16.1215261408952,
+    "LocA": 69.11930252648088,
+    "MOTA": -77.00534759358288,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.85": {
+  "config": {
+   "det_thresh": 0.85,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 36.88513513262882,
+    "DetA": 38.49227994132847,
+    "AssA": 36.584714380027116,
+    "LocA": 75.87242034254564,
+    "MOTA": 37.98832510103278,
+    "IDSW": 149.0,
+    "IDF1": 48.377661383579344
+   },
+   "pedestrian": {
+    "HOTA": 9.26827313319938,
+    "DetA": 5.339310292621597,
+    "AssA": 16.121974795887418,
+    "LocA": 69.11930252648088,
+    "MOTA": -73.79679144385027,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ },
+ "ocsort_th0.9": {
+  "config": {
+   "det_thresh": 0.9,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 38.87102371189057,
+    "DetA": 37.76104850352189,
+    "AssA": 41.54010708307312,
+    "LocA": 76.21744201438736,
+    "MOTA": 39.58239784463404,
+    "IDSW": 98.0,
+    "IDF1": 52.19444444444444
+   },
+   "pedestrian": {
+    "HOTA": 9.721168762102042,
+    "DetA": 6.008602499692402,
+    "AssA": 15.756215422949934,
+    "LocA": 67.19976853562187,
+    "MOTA": -58.82352941176471,
+    "IDSW": 0.0,
+    "IDF1": 0.6688963210702341
+   }
+  }
+ },
+ "ocsort_th0.95": {
+  "config": {
+   "det_thresh": 0.95,
+   "max_age": 30,
+   "min_hits": 3,
+   "iou_threshold": 0.3,
+   "delta_t": 3,
+   "inertia": 0.2,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "car": {
+    "HOTA": 34.56167372796889,
+    "DetA": 28.436935962444977,
+    "AssA": 42.89355497409878,
+    "LocA": 78.0609697557177,
+    "MOTA": 33.02649303996408,
+    "IDSW": 44.0,
+    "IDF1": 49.20584498094028
+   },
+   "pedestrian": {
+    "HOTA": 4.5368220698453845,
+    "DetA": 2.6027707188723017,
+    "AssA": 7.9164630600065555,
+    "LocA": 70.98981027841884,
+    "MOTA": -18.181818181818183,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ }
+}

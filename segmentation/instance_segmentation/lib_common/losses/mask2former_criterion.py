@@ -78,9 +78,6 @@ def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tens
                tgt_image: torch.Tensor, activation: str = "softmax"):
     """割り当ての費用(画像ごとのクエリ × 全部の正解の物体)。
 
-    activation "sigmoid": クラスの値が (B, Q, K) の sigmoid の方式(GTR 系の画像のモデルを segmenter に使う DVIS の学習の前半の割り当て)。
-    クラスの費用を −sigmoid の確率にする(softmax の方式の −softmax の確率と同じ形。私の判断)。
-
     画像ごとに点の位置を 1 組選び、その画像のクエリと正解の物体を同じ点で比べる(公式と同じ)。速さのため、全部の画像の費用を
     まとめて (B, Q, T) で計算し、CPU へは 1 回だけ移す(ほかの画像の正解との費用も計算されるが、使う側はその部分を使わない)。
 
@@ -90,6 +87,9 @@ def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tens
         tgt_labels: 全部の画像の正解の物体のクラスをつなげたもの (T(正解の物体の数),)。
         tgt_masks: 同じ順の正解のマスク (T, H, W) の float。
         tgt_image: 正解の物体がどの画像のものか (T,)。
+        activation: クラスの値の付け方。"softmax"(既定)か "sigmoid"(クラスの値が (B, Q, K) の sigmoid の方式。GTR 系の画像の
+            モデルを segmenter に使う DVIS の学習の前半の割り当て。クラスの費用を −sigmoid の確率にする。softmax の方式の
+            −softmax の確率と同じ形。私の判断)。
 
     Returns:
         費用 (B, Q, T) の numpy の配列。
@@ -115,7 +115,14 @@ def match_cost(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tens
 @torch.no_grad()
 def match(logits: torch.Tensor, masks: torch.Tensor, tgt_labels: torch.Tensor, tgt_masks: torch.Tensor,
           tgt_image: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """画像のまとめ(B 枚)の割り当て(引数は match_cost と同じ)。
+    """画像のまとめ(B 枚)の割り当て(ハンガリアン法)。
+
+    Args:
+        logits: match_cost と同じ。
+        masks: match_cost と同じ。
+        tgt_labels: match_cost と同じ。
+        tgt_masks: match_cost と同じ。
+        tgt_image: match_cost と同じ。
 
     Returns:
         画像ごとの (クエリの番号 (その画像の正解の数,), 画像の中での正解の番号 (同じ形,))。

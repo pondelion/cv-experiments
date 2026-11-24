@@ -74,7 +74,11 @@ class IFANCriterion(Mask2FormerCriterion):
         self.progress = progress
 
     def _distill_weight(self) -> float:
-        """今の CLSD の重み(distill_start までは 0、その後 w_distill から 0 へ直線)。"""
+        """今の CLSD の重み(distill_start までは 0、その後 w_distill から 0 へ直線)。
+
+        Returns:
+            重み。
+        """
         if self.progress < self.distill_start:
             return 0.0
         return self.w_distill * max(0.0, 1 - (self.progress - self.distill_start) / (1 - self.distill_start))

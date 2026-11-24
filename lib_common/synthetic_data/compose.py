@@ -85,7 +85,8 @@ def _box_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> floa
     """2 つの枠の IoU(重なりの面積 / 合わせた面積)。
 
     Args:
-        a, b: 枠 (x0, y0, x1, y1)(画素)。
+        a: 枠 (x0, y0, x1, y1)(画素)。
+        b: 枠 (x0, y0, x1, y1)(画素)。
 
     Returns:
         IoU(0〜1)。
@@ -109,7 +110,8 @@ def random_layout(objects: list[ObjectCutout], size: int, rng: random.Random, mi
         objects: 置く物体。
         size: 画像の一辺の画素数。
         rng: 乱数。
-        min_height, max_height: 物体の高さの、画像の高さに対する割合の範囲(奥 → 手前)。
+        min_height: 物体の高さの、画像の高さに対する割合の下限(奥)。
+        max_height: 同じ割合の上限(手前)。
         max_width: 物体の幅の、画像の幅に対する割合の上限。
         max_overlap: ほかの物体の枠との IoU の上限。
         tries: 1 つの物体を置き直す回数の上限。
@@ -172,7 +174,9 @@ def compose_layers(shape: tuple[int, int], placements: list[Placement], min_visi
 
     Args:
         shape: 画像の (高さ, 幅)。
-        placements, min_visible, min_pixels: compose と同じ。
+        placements: compose と同じ。
+        min_visible: compose と同じ。
+        min_pixels: compose と同じ。
         return_kept: True なら、正解に残った物体の番号も返す。
 
     Returns:

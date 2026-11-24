@@ -109,7 +109,14 @@ def convert_vipseg(root: Path, split_videos: dict[str, list[str]], workers: int 
 
 
 def load_video_set(name: str) -> dict:
-    """共通の形式のセット(`datasets/sets/{name}.json`)を読む。"""
+    """共通の形式のセット(`datasets/sets/{name}.json`)を読む。
+
+    Args:
+        name: セットの名前。
+
+    Returns:
+        {"videos", "annotations", "categories"}(ファイルの先頭の形)。
+    """
     return json.loads((DATASETS_DIR / "sets" / f"{name}.json").read_text())
 
 
@@ -136,7 +143,14 @@ def video_train_transforms(size: int = 512, scale_range: tuple[float, float] = (
 
 
 def video_eval_transforms(size: int = 512) -> A.Compose:
-    """評価の変換(長い辺を S にそろえて、右と下を埋める。画像の段階の eval_transforms と同じ)。"""
+    """評価の変換(長い辺を S にそろえて、右と下を埋める。画像の段階の eval_transforms と同じ)。
+
+    Args:
+        size: 入力の一辺 S。
+
+    Returns:
+        albumentations の変換。
+    """
     return A.Compose([
         A.LongestMaxSize(max_size=size, interpolation=cv2.INTER_LINEAR, mask_interpolation=cv2.INTER_NEAREST),
         A.PadIfNeeded(min_height=size, min_width=size, position="top_left", border_mode=cv2.BORDER_CONSTANT, fill=0, fill_mask=0),
@@ -144,7 +158,14 @@ def video_eval_transforms(size: int = 512) -> A.Compose:
 
 
 def _normalize(frames: np.ndarray) -> torch.Tensor:
-    """(T, H, W, 3) の uint8 → (T, 3, H, W) の float32(ImageNet の平均・標準偏差で正規化)。"""
+    """フレームを ImageNet の平均・標準偏差で正規化し、チャンネルを前に出す。
+
+    Args:
+        frames: (T, H, W, 3) の uint8。
+
+    Returns:
+        (T, 3, H, W) の float32。
+    """
     x = torch.from_numpy(np.ascontiguousarray(frames)).float().div_(255)  # (T, H, W, 3)
     x = (x - torch.tensor(MEAN)) / torch.tensor(STD)
     return x.permute(0, 3, 1, 2).contiguous()  # (T, H, W, 3) -> (T, 3, H, W)
@@ -178,6 +199,38 @@ def sample_clip(length: int, clip_len: int, frame_range: int, rng: random.Random
     return sorted(rng.choices(near, k=clip_len - 1) + [ref])
 
 
+def sample_clip_skip(length: int, clip_len: int, skip_p: float, random_p: float, rng: random.Random) -> list[int]:
+    """フレームの間引きのデータ拡張つきで、学習の区間のフレームの番号を選ぶ(公式にはない、この exp の追加の取り方)。
+
+    区間に入る時間の幅を広げるため、次の 2 つを確率で切り替える:
+        - 確率 1 − skip_p: 連続した clip_len 枚(sample_clip の連続の取り方と同じ)
+        - 確率 skip_p: 連続した 2 × clip_len 枚の範囲から、1 枚おきに clip_len 枚(等間隔)。さらにそのうち確率 random_p で、等間隔の
+          代わりに、同じ範囲から無作為に clip_len 枚を選んで時刻の順に並べる(間隔が不ぞろいの取り方。修正前の取り方に近い)
+    動画が 2 × clip_len 枚より短い(clip_len より長い)ときは、間引きの範囲を動画全体にし、等間隔はできるだけ等しい間隔で clip_len 枚
+    (例: 15 フレームで 10 枚なら 0, 2, 3, 5, 6, 8, 9, 11, 12, 14)、無作為は動画全体から clip_len 枚を選ぶ(train の動画の 67% は
+    20 フレームより短く、そのままでは間引きがほとんど使われないため。ユーザーの指定)。clip_len 枚以下の動画は sample_clip と同じ。
+
+    Args:
+        length: 動画のフレームの数。
+        clip_len: 区間のフレームの数 T。
+        skip_p: 間引きの取り方を使う確率。
+        random_p: 間引きの取り方のうち、等間隔の代わりに無作為に選ぶ確率。
+        rng: 乱数。
+
+    Returns:
+        フレームの番号の並び(長さ T、時刻の順)。
+    """
+    if length <= clip_len or rng.random() >= skip_p:
+        return sample_clip(length, clip_len, -1, rng)  # frame_range < 0: 連続した clip_len 枚
+    window = min(2 * clip_len, length)  # 間引きの範囲の枚数
+    start = rng.randrange(length - window + 1)
+    if rng.random() < random_p:
+        return sorted(rng.sample(range(start, start + window), clip_len))
+    if window == 2 * clip_len:  # 2 × clip_len 枚の範囲から 1 枚おき
+        return list(range(start, start + window, 2))
+    return [round(i * (window - 1) / (clip_len - 1)) for i in range(clip_len)]  # 短い動画: 動画全体の両端を含む、できるだけ等しい間隔
+
+
 class VideoClipDataset(Dataset):
     """学習の区間を返す(1 つの要素 = 1 本の動画から選んだ T 枚のフレーム。公式の VidEoMT の設定では連続した T 枚)。
 
@@ -191,9 +244,13 @@ class VideoClipDataset(Dataset):
         frame_range: sample_clip の frame_range(公式は 2)。
         size: 入力の一辺 S。
         seed: 乱数の種(要素ごとに seed と番号から作るので、worker の数によらず同じ区間になる)。
+        frame_skip_p: 0 より大きいと、区間を sample_clip_skip(フレームの間引きのデータ拡張つき)で選ぶ。その skip_p。
+        frame_skip_random_p: sample_clip_skip の random_p。
     """
 
-    def __init__(self, set_name: str, clip_len: int = 5, frame_range: int = 2, size: int = 512, seed: int = 0):
+    def __init__(self, set_name: str, clip_len: int = 5, frame_range: int = 2, size: int = 512, seed: int = 0,
+                 frame_skip_p: float = 0.0, frame_skip_random_p: float = 0.0):
+        self.frame_skip_p, self.frame_skip_random_p = frame_skip_p, frame_skip_random_p
         d = load_video_set(set_name)
         self.videos = d["videos"]
         self.cat_ids = [c["id"] for c in d["categories"]]
@@ -206,20 +263,38 @@ class VideoClipDataset(Dataset):
         self.epoch = 0  # set_epoch で変えると、同じ動画から別の区間を選ぶ
 
     def set_epoch(self, epoch: int) -> None:
-        """エポックごとに区間の選び方を変える。"""
+        """エポックごとに区間の選び方を変える。
+
+        Args:
+            epoch: エポックの番号。
+        """
         self.epoch = epoch
 
     def __len__(self) -> int:
+        """1 エポックの区間の数(動画の数)を返す。
+
+        Returns:
+            動画の数。
+        """
         return len(self.videos)
 
     def __getitem__(self, i: int) -> dict:
-        """Returns: {"images": (T, 3, S, S), "labels": (N,), "masks": (N, T, S, S) の bool, "video_id"}。"""
+        """i 番目の動画から区間を選び、学習の変換をかける。
+
+        Args:
+            i: 動画の番号。
+
+        Returns:
+            {"images": (T, 3, S, S), "labels": (N,), "masks": (N, T, S, S) の bool, "video_id"}。
+        """
         rng = random.Random((self.seed, self.epoch, i).__hash__())
         v = self.videos[i]
         if getattr(self, "deva_max_jump", None):  # DEVA の学習: 公式の VOSDataset のフレームの選び方(deva/training.py)
             from segmentation.instance_segmentation.lib_common.models.video.deva.training import sample_frames
             frames = sample_frames(v["length"], self.deva_max_jump, np.random.default_rng(abs(hash((self.seed, self.epoch, i)))),
                                    self.clip_len)
+        elif self.frame_skip_p > 0:  # フレームの間引きのデータ拡張つき
+            frames = sample_clip_skip(v["length"], self.clip_len, self.frame_skip_p, self.frame_skip_random_p, rng)
         else:
             frames = sample_clip(v["length"], self.clip_len, self.frame_range, rng)
         imgs = np.stack([np.array(Image.open(DATASETS_DIR / v["file_names"][f]).convert("RGB")) for f in frames])  # (T, H, W, 3)
@@ -243,7 +318,14 @@ class VideoClipDataset(Dataset):
 
 
 def collate_clips(batch: list[dict]) -> dict:
-    """区間をまとめる: images は (B, T, 3, S, S) に重ね、正解は区間ごとのリストのまま。"""
+    """区間をまとめる(images は重ね、正解は区間ごとのリストのまま)。
+
+    Args:
+        batch: VideoClipDataset の要素の並び。
+
+    Returns:
+        {"images": (B, T, 3, S, S), "targets": [{"labels", "masks"}], "video_ids"}。
+    """
     return {"images": torch.stack([b["images"] for b in batch]),
             "targets": [{"labels": b["labels"], "masks": b["masks"]} for b in batch],
             "video_ids": [b["video_id"] for b in batch]}
@@ -262,10 +344,22 @@ class VideoEvalDataset(Dataset):
         self.videos, self.size, self.transform = d["videos"], size, video_eval_transforms(size)
 
     def __len__(self) -> int:
+        """動画の数を返す。
+
+        Returns:
+            動画の数。
+        """
         return len(self.videos)
 
     def __getitem__(self, i: int) -> dict:
-        """Returns: {"images": (T, 3, S, S), "video_id", "orig_size": (H, W), "valid_size": (縮めた後の画像の部分の h, w)}。"""
+        """i 番目の動画の全フレームを読み、評価の変換をかける。
+
+        Args:
+            i: 動画の番号。
+
+        Returns:
+            {"images": (T, 3, S, S), "video_id", "orig_size": (H, W), "valid_size": (縮めた後の画像の部分の h, w)}。
+        """
         v = self.videos[i]
         imgs = np.stack([np.array(Image.open(DATASETS_DIR / f).convert("RGB")) for f in v["file_names"]])  # (T, H, W, 3)
         out = np.asarray(self.transform(images=imgs)["images"])  # (T, S, S, 3)

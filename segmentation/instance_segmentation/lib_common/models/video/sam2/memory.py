@@ -22,7 +22,15 @@ from segmentation.instance_segmentation.lib_common.models.video.sam2.blocks impo
 
 
 class MaskDownSampler(nn.Module):
-    """マスクを stride 2 の畳み込みで 1/16 に縮める(チャンネルは毎回 4 倍)。"""
+    """マスクを stride 2 の畳み込みで 1/16 に縮める(チャンネルは毎回 4 倍)。
+
+    Args:
+        dim: 出力のチャンネル(最後の 1×1 の畳み込み)。
+        kernel_size: 畳み込みの大きさ。
+        stride: 1 回の縮め方。
+        padding: 畳み込みの埋め。
+        total_stride: 全体の縮め方(stride の累乗であること)。
+    """
 
     def __init__(self, dim: int = 256, kernel_size: int = 3, stride: int = 2, padding: int = 1, total_stride: int = 16):
         super().__init__()
@@ -39,11 +47,26 @@ class MaskDownSampler(nn.Module):
         self.encoder = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """マスクを縮める。
+
+        Args:
+            x: (B, 1, 16H, 16W)。
+
+        Returns:
+            (B, dim, H, W)。
+        """
         return self.encoder(x)
 
 
 class CXBlock(nn.Module):
-    """ConvNeXt の block(7×7 depthwise → LayerNorm → Linear 4 倍 → GELU → Linear → layer scale、残差)。"""
+    """ConvNeXt の block(7×7 depthwise → LayerNorm → Linear 4 倍 → GELU → Linear → layer scale、残差)。
+
+    Args:
+        dim: チャンネル。
+        kernel_size: depthwise の畳み込みの大きさ。
+        padding: その埋め。
+        layer_scale: layer scale の初期値。
+    """
 
     def __init__(self, dim: int = 256, kernel_size: int = 7, padding: int = 3, layer_scale: float = 1e-6):
         super().__init__()
@@ -53,13 +76,26 @@ class CXBlock(nn.Module):
         self.gamma = nn.Parameter(layer_scale * torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """block をかける。
+
+        Args:
+            x: (B, dim, H, W)。
+
+        Returns:
+            (B, dim, H, W)。
+        """
         y = self.norm(self.dwconv(x)).permute(0, 2, 3, 1)  # (B, C, H, W) -> (B, H, W, C)
         y = self.gamma * self.pwconv2(self.act(self.pwconv1(y)))
         return x + y.permute(0, 3, 1, 2)
 
 
 class MemoryEncoder(nn.Module):
-    """画像の特徴とマスクから、1 フレームの記憶(特徴と位置の埋め込み)を作る。"""
+    """画像の特徴とマスクから、1 フレームの記憶(特徴と位置の埋め込み)を作る。
+
+    Args:
+        dim: 画像の特徴のチャンネル。
+        out_dim: 記憶の特徴のチャンネル(公式は 64)。
+    """
 
     def __init__(self, dim: int = 256, out_dim: int = 64):
         super().__init__()
@@ -71,9 +107,15 @@ class MemoryEncoder(nn.Module):
         self.position_encoding = PositionEmbeddingSine(out_dim)
 
     def forward(self, pix_feat: torch.Tensor, masks: torch.Tensor, skip_mask_sigmoid: bool = False):
-        """Args: pix_feat (B, C, H, W)、masks (B, 1, 16H, 16W)(値。skip_mask_sigmoid なら 0〜1)。
+        """記憶を作る(縮めたマスクを画像の特徴に足し、CXBlock 2 つで混ぜて射影する)。
 
-        Returns: (記憶の特徴 (B, M, H, W), 位置の埋め込み (B, M, H, W))。
+        Args:
+            pix_feat: 画像の特徴 (B, C, H, W)。
+            masks: マスク (B, 1, 16H, 16W)(値。skip_mask_sigmoid なら 0〜1)。
+            skip_mask_sigmoid: masks に sigmoid をかけずに使うか。
+
+        Returns:
+            (記憶の特徴 (B, M, H, W), 位置の埋め込み (B, M, H, W))。
         """
         if not skip_mask_sigmoid:
             masks = torch.sigmoid(masks)
@@ -85,7 +127,14 @@ class MemoryEncoder(nn.Module):
 
 
 class MemoryAttentionLayer(nn.Module):
-    """記憶の注意の 1 層(前置きの LayerNorm)。"""
+    """記憶の注意の 1 層(前置きの LayerNorm。self-attention → 記憶への cross-attention → FFN)。
+
+    Args:
+        dim: 画像の特徴の次元。
+        mem_dim: 記憶の次元。
+        ffn: FFN の中間の次元。
+        dropout: dropout の割合。
+    """
 
     def __init__(self, dim: int = 256, mem_dim: int = 64, ffn: int = 2048, dropout: float = 0.1):
         super().__init__()
@@ -96,8 +145,19 @@ class MemoryAttentionLayer(nn.Module):
         self.dropout, self.dropout1, self.dropout2, self.dropout3 = (nn.Dropout(dropout) for _ in range(4))
 
     def forward(self, tgt, memory, pos, query_pos, num_k_exclude_rope: int = 0):
-        """Args: tgt (B, H·W, C)、memory・pos (B, N, M)、query_pos (B, H·W, C)(使わない: 公式の pos_enc_at_attn・
-        pos_enc_at_cross_attn_queries が False)、num_k_exclude_rope: 記憶の最後の物体のポインタのトークンの数。"""
+        """1 層進める。
+
+        Args:
+            tgt: 今のフレームの画像の特徴 (B, H·W, C)。
+            memory: 記憶 (B, N, M)。
+            pos: 記憶の位置の埋め込み (B, N, M)。
+            query_pos: 今のフレームの位置の埋め込み (B, H·W, C)(使わない: 公式の pos_enc_at_attn・
+                pos_enc_at_cross_attn_queries が False)。
+            num_k_exclude_rope: 記憶の最後の物体のポインタのトークンの数(RoPE をかけない)。
+
+        Returns:
+            (B, H·W, C)。
+        """
         t2 = self.norm1(tgt)
         tgt = tgt + self.dropout1(self.self_attn(t2, t2, t2))
         t2 = self.norm2(tgt)
@@ -107,7 +167,13 @@ class MemoryAttentionLayer(nn.Module):
 
 
 class MemoryAttention(nn.Module):
-    """今のフレームの画像の特徴を、記憶(過去のフレームの記憶の特徴 + 物体のポインタ)に注意させて直す(4 層)。"""
+    """今のフレームの画像の特徴を、記憶(過去のフレームの記憶の特徴 + 物体のポインタ)に注意させて直す(4 層)。
+
+    Args:
+        dim: 画像の特徴の次元。
+        mem_dim: 記憶の次元。
+        num_layers: 層の数。
+    """
 
     def __init__(self, dim: int = 256, mem_dim: int = 64, num_layers: int = 4):
         super().__init__()
@@ -116,7 +182,18 @@ class MemoryAttention(nn.Module):
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens: int = 0) -> torch.Tensor:
-        """Args: curr・curr_pos (B, H·W, C)、memory・memory_pos (B, N, M)。Returns: (B, H·W, C)。"""
+        """記憶で今のフレームの画像の特徴を直す(入力に位置の埋め込みの 0.1 倍を足してから。公式と同じ)。
+
+        Args:
+            curr: 今のフレームの画像の特徴 (B, H·W, C)。
+            memory: 記憶 (B, N, M)。
+            curr_pos: 今のフレームの位置の埋め込み (B, H·W, C)。
+            memory_pos: 記憶の位置の埋め込み (B, N, M)。
+            num_obj_ptr_tokens: 記憶の最後の物体のポインタのトークンの数。
+
+        Returns:
+            (B, H·W, C)。
+        """
         x = curr + 0.1 * curr_pos
         for layer in self.layers:
             x = layer(x, memory, memory_pos, curr_pos, num_obj_ptr_tokens)

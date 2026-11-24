@@ -100,7 +100,8 @@ class DecoderLayer(nn.Module):
         Args:
             x: (B, T, C)(T = Q + P + N)。
             mask: 注意のマスク (B, 1, T, T)(True = 見る)か None。
-            cos, sin: RoPE の (N, d)。
+            cos: RoPE の cos (N, d)。
+            sin: RoPE の sin (N, d)。
 
         Returns:
             (B, T, C)。
@@ -154,7 +155,14 @@ class PMT(nn.Module):
         self.register_buffer("mask_probs", torch.ones(num_blocks))
 
     def train(self, mode: bool = True):
-        """学習・評価の切り替え。固定した encoder は常に評価のときの動きにする。"""
+        """学習・評価の切り替え。固定した encoder は常に評価のときの動きにする。
+
+        Args:
+            mode: True で学習の状態。
+
+        Returns:
+            self。
+        """
         super().train(mode)
         self.backbone.eval()
         return self

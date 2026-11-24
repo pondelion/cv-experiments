@@ -45,7 +45,11 @@ from segmentation.instance_segmentation.lib_common.models.video.minvis import ma
 
 
 def _xavier(module: nn.Module) -> None:
-    """2 次元以上の重みを xavier_uniform で初期化する(公式の SelfAttentionLayer・CrossAttentionLayer・FFNLayer と同じ)。"""
+    """2 次元以上の重みを xavier_uniform で初期化する(公式の SelfAttentionLayer・CrossAttentionLayer・FFNLayer と同じ)。
+
+    Args:
+        module: 初期化する層。
+    """
     for p in module.parameters():
         if p.dim() > 1:
             nn.init.xavier_uniform_(p)
@@ -70,8 +74,17 @@ class TrackerLayer(nn.Module):
 
     def forward(self, identity: torch.Tensor, query: torch.Tensor, memory: torch.Tensor,
                 value: torch.Tensor | None = None) -> torch.Tensor:
-        """Args: identity(残差に足すもの)・query(問い)・memory(キー。value がなければ値も)・value(値。DVIS++ はキーと値を分ける)は
-        (B, Q, C)。Returns: (B, Q, C)。"""
+        """1 層進める。
+
+        Args:
+            identity: 残差に足すもの (B, Q, C)。
+            query: 問い (B, Q, C)。
+            memory: キー (B, Q, C)(value がなければ値も)。
+            value: 値 (B, Q, C) か None(DVIS++ はキーと値を分ける)。
+
+        Returns:
+            (B, Q, C)。
+        """
         value = memory if value is None else value
         x = self.norms[0](identity + self.cross(query, memory, value, need_weights=False)[0])  # referring cross-attention
         x = self.norms[1](x + self.self_attn(x, x, x, need_weights=False)[0])
@@ -112,7 +125,15 @@ class ReferringTracker(nn.Module):
         return [self.predict(x, frame["mask_feat"]) for x in (outs[-1:] if last_only else outs)], state, idx
 
     def _layers(self, cur: torch.Tensor, state: dict | None) -> tuple[list[torch.Tensor], dict, torch.Tensor]:
-        """追跡の部の層(上の 2a〜c)。Args: cur (B, Q, C)、state。Returns: (層ごとの出力(LayerNorm の前), state, 並べ替え)。"""
+        """追跡の部の層(ファイルの先頭の 2a〜c)。
+
+        Args:
+            cur: 今のフレームの segmenter のクエリの埋め込み (B, Q, C)。
+            state: 前のフレームの state(step を参照)か None。
+
+        Returns:
+            (層ごとの出力(LayerNorm の前), 次の state, 並べ替え (B, Q))。
+        """
         b, q = cur.shape[:2]
         if state is None:
             idx = torch.arange(q, device=cur.device).expand(b, q)
@@ -128,24 +149,38 @@ class ReferringTracker(nn.Module):
         return outs, {"embeds": cur_sorted, "out": outs[-1]}, idx
 
     def predict(self, x: torch.Tensor, mask_feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Args: x (B, Q, C)、mask_feat (B, C, h, w)。Returns: (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。"""
+        """層の出力からクラスとマスクを出す。
+
+        Args:
+            x: 層の出力 (B, Q, C)。
+            mask_feat: マスクを作る特徴 (B, C, h, w)。
+
+        Returns:
+            (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。
+        """
         x = self.decoder_norm(x)
         return self.class_embed(x), torch.einsum("bqc,bchw->bqhw", self.mask_embed(x), mask_feat)
 
 
-def load_segmenter(path: str) -> Mask2Former:
+def load_segmenter(path: str, video_set: str) -> Mask2Former:
     """画像の学習(exp00101 の train.py・exp00502 の train_image.py)で保存した Mask2Former の重みを、同じ設定で作って読む。
 
     Args:
         path: runs/{学習の名前}/best.pt(同じ場所の config.json から backbone・クエリの数・pixel decoder を読む)。
+        video_set: 使う動画のセットの名前(出力のクラスの番号をこのセットの並びにする。画像のセットと動画のセットではクラスの並びが
+            違うことがあるため。image_adapter.reorder_classes)。
+
+    Returns:
+        重みを読んだ Mask2Former。
     """
+    from segmentation.instance_segmentation.lib_common.models.video.image_adapter import reorder_classes, video_class_order
     cfg = json.loads((Path(path).parent / "config.json").read_text())
     n_classes = len(json.loads(Path(cfg["train_json"]).read_text())["categories"])  # 学習のデータのクラスの数
     # pretrained=False: backbone の学習済みの重みは要らない(すぐ下で、学習した全体の重みで上書きする)
     model = Mask2Former(n_classes, cfg["backbone"], cfg["num_queries"], pretrained=False, pixel_decoder=cfg["pixel_decoder"],
                         mask_pos=cfg["mask_pos"])
     model.load_state_dict(torch.load(path, map_location="cpu"))
-    return model
+    return reorder_classes(model, "mask2former", video_class_order(cfg["train_json"], video_set))
 
 
 class DVISOnline(nn.Module):
@@ -157,6 +192,7 @@ class DVISOnline(nn.Module):
             GTR 系はクラスが sigmoid なので、学習の前半の割り当てのクラスの費用は −sigmoid の確率(match_cost の activation)。
         num_classes: クラスの数。
         tracker_layers: 追跡の部の層の数(公式は 6)。
+        tracker: 追跡の部(None なら ReferringTracker。DVIS++ は ReferringTrackerPlus、CAVIS は CAVISTracker を渡す)。
     """
 
     def __init__(self, segmenter: nn.Module, num_classes: int, tracker_layers: int = 6, tracker: nn.Module | None = None):
@@ -170,14 +206,28 @@ class DVISOnline(nn.Module):
         self.tracker = tracker if tracker is not None else ReferringTracker(num_classes, layers=tracker_layers)
 
     def train(self, mode: bool = True):
-        """segmenter は学習中も eval のまま(公式と同じ。BatchNorm・dropout を学習の動きにしない)。"""
+        """学習の状態を切り替える(segmenter は学習中も eval のまま。公式と同じく BatchNorm・dropout を学習の動きにしない)。
+
+        Args:
+            mode: True で学習の状態。
+
+        Returns:
+            self。
+        """
         super().train(mode)
         self.segmenter.eval()
         return self
 
     @torch.no_grad()
     def _segment(self, frames: torch.Tensor) -> dict:
-        """固定した segmenter をフレームにかける。Args: frames (M, 3, S, S)。Returns: 最後の層の予測と埋め込み・マスクを作る特徴。"""
+        """固定した segmenter をフレームにかける。
+
+        Args:
+            frames: (M, 3, S, S)。
+
+        Returns:
+            最後の層の {"logits", "masks", "embeds", "embeds_raw", "mask_feat"(, "reid")}(勾配なし)。
+        """
         out = self.segmenter(frames)
         self.activation_seg = out["activation"]  # segmenter のクラスの値の付け方(学習の前半の割り当てに使う)
         keys = ("logits", "masks", "embeds", "embeds_raw", "mask_feat") + (("reid",) if "reid" in out else ())

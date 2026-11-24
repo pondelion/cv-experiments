@@ -42,6 +42,7 @@ class SpatialTuningAdapter(nn.Module):
 
     Args:
         c: 基本のチャンネル(出力は stride 8 で 2c、16・32 で 4c)。
+        with_s4: stride 4 の段(stem の出力、c チャンネル)も出すか(4 段の Mask2Former 用)。
     """
 
     def __init__(self, c: int = 16, with_s4: bool = False):
@@ -56,8 +57,14 @@ class SpatialTuningAdapter(nn.Module):
         self.channels = ([c] if with_s4 else []) + [2 * c, 4 * c, 4 * c]
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Args: x: (B, 3, H, W)。Returns: [(B, 2c, H/8, W/8), (B, 4c, H/16, W/16), (B, 4c, H/32, W/32)]
-        (with_s4 のときは先頭に (B, c, H/4, W/4))。"""
+        """画像から段ごとの細かい特徴を作る。
+
+        Args:
+            x: (B, 3, H, W)。
+
+        Returns:
+            [(B, 2c, H/8, W/8), (B, 4c, H/16, W/16), (B, 4c, H/32, W/32)](with_s4 のときは先頭に (B, c, H/4, W/4))。
+        """
         f4 = self.stem(x)
         f8 = self.s8(f4)
         f16 = self.s16(f8)
@@ -106,11 +113,22 @@ class ViTAdapter(nn.Module):
         self.pretrained_cfg = self.vit.pretrained_cfg
 
     def set_grad_checkpointing(self, enable: bool = True) -> None:
-        """ViT の層で gradient checkpointing を使う(STA と融合の層は軽いので使わない)。"""
+        """ViT の層で gradient checkpointing を使う(STA と融合の層は軽いので使わない)。
+
+        Args:
+            enable: 使うか。
+        """
         self.vit.set_grad_checkpointing(enable)
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Args: x: (B, 3, H, W)。Returns: 段ごとの [(B, C, H/s, W/s)](既定は s = 8・16・32、strides が 4 段なら 4・8・16・32)。"""
+        """ViT の途中の層の特徴を STA の細かい特徴と合わせて、段ごとの特徴にする。
+
+        Args:
+            x: (B, 3, H, W)。
+
+        Returns:
+            段ごとの [(B, C, H/s, W/s)](既定は s = 8・16・32、strides が 4 段なら 4・8・16・32)。
+        """
         sem = self.vit.forward_intermediates(x, indices=self.layers, norm=self.norm, output_fmt="NCHW",
                                              intermediates_only=True)  # 段の数 × (B, D, H/16, W/16)
         detail = self.sta(x)

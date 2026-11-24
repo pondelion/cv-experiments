@@ -1,0 +1,42 @@
+{
+ "sort_th0.9": {
+  "config": {
+   "det_thresh": 0.9,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 27.29663291582084,
+    "DetA": 52.11960452005952,
+    "AssA": 14.564059876593003,
+    "LocA": 82.21665200865581,
+    "MOTA": 62.040524455025135,
+    "IDSW": 3636.0,
+    "IDF1": 26.591218051523054
+   }
+  }
+ },
+ "sort_th0": {
+  "config": {
+   "det_thresh": 0.0,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 18.08874889534286,
+    "DetA": 47.0094961898323,
+    "AssA": 7.310867339261062,
+    "LocA": 80.04986070793647,
+    "MOTA": 35.36740277506351,
+    "IDSW": 14372.0,
+    "IDF1": 13.50707894862694
+   }
+  }
+ }
+}

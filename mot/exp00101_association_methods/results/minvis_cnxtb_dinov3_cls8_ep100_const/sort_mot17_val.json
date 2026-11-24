@@ -1,0 +1,242 @@
+{
+ "sort_th0": {
+  "config": {
+   "det_thresh": 0.0,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 19.494303682586,
+    "DetA": 21.973642422695868,
+    "AssA": 19.067412155918174,
+    "LocA": 75.06152850945067,
+    "MOTA": -37.708989805375346,
+    "IDSW": 1281.0,
+    "IDF1": 17.71795762417506
+   }
+  }
+ },
+ "sort_th0.15": {
+  "config": {
+   "det_thresh": 0.15,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 23.84870440430664,
+    "DetA": 26.159627431239013,
+    "AssA": 23.3751510132968,
+    "LocA": 76.23919396244989,
+    "MOTA": 2.9508804448563484,
+    "IDSW": 888.0,
+    "IDF1": 23.41228670448776
+   }
+  }
+ },
+ "sort_th0.2": {
+  "config": {
+   "det_thresh": 0.2,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.114583590721757,
+    "DetA": 26.700485442001792,
+    "AssA": 25.20256336930013,
+    "LocA": 76.66214990934698,
+    "MOTA": 8.641334569045412,
+    "IDSW": 807.0,
+    "IDF1": 25.249764589697065
+   }
+  }
+ },
+ "sort_th0.3": {
+  "config": {
+   "det_thresh": 0.3,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.977069832170397,
+    "DetA": 27.151311765009805,
+    "AssA": 25.97766321076027,
+    "LocA": 77.18843268468515,
+    "MOTA": 15.27710843373494,
+    "IDSW": 656.0,
+    "IDF1": 26.099481467255618
+   }
+  }
+ },
+ "sort_th0.4": {
+  "config": {
+   "det_thresh": 0.4,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 27.260213804892185,
+    "DetA": 27.049244046086635,
+    "AssA": 28.56625363714473,
+    "LocA": 77.58727995580897,
+    "MOTA": 17.727525486561632,
+    "IDSW": 550.0,
+    "IDF1": 28.274897563608704
+   }
+  }
+ },
+ "sort_th0.5": {
+  "config": {
+   "det_thresh": 0.5,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 28.2555680449817,
+    "DetA": 26.856074722088625,
+    "AssA": 30.782799230349816,
+    "LocA": 77.95889808793119,
+    "MOTA": 20.040778498609825,
+    "IDSW": 504.0,
+    "IDF1": 29.82899777171328
+   }
+  }
+ },
+ "sort_th0.6": {
+  "config": {
+   "det_thresh": 0.6,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 29.180007415461436,
+    "DetA": 26.661040759288433,
+    "AssA": 32.92184751514151,
+    "LocA": 78.14685352455443,
+    "MOTA": 21.212233549582947,
+    "IDSW": 420.0,
+    "IDF1": 31.285001140308644
+   }
+  }
+ },
+ "sort_th0.7": {
+  "config": {
+   "det_thresh": 0.7,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 29.52293150217801,
+    "DetA": 26.186784998747935,
+    "AssA": 34.24542067922058,
+    "LocA": 78.4863941919541,
+    "MOTA": 22.242817423540316,
+    "IDSW": 342.0,
+    "IDF1": 31.91593478764777
+   }
+  }
+ },
+ "sort_th0.8": {
+  "config": {
+   "det_thresh": 0.8,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 30.04456672506622,
+    "DetA": 25.261179252470328,
+    "AssA": 36.49771377127984,
+    "LocA": 79.00144554975125,
+    "MOTA": 22.74328081556997,
+    "IDSW": 269.0,
+    "IDF1": 33.10402994122453
+   }
+  }
+ },
+ "sort_th0.85": {
+  "config": {
+   "det_thresh": 0.85,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 29.909230337149477,
+    "DetA": 24.387078162176586,
+    "AssA": 37.32899036803064,
+    "LocA": 79.36636764961489,
+    "MOTA": 22.758109360519,
+    "IDSW": 218.0,
+    "IDF1": 32.275388002792546
+   }
+  }
+ },
+ "sort_th0.9": {
+  "config": {
+   "det_thresh": 0.9,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 31.16640738248706,
+    "DetA": 22.5647990257304,
+    "AssA": 43.621040781862746,
+    "LocA": 80.12218165013807,
+    "MOTA": 22.520852641334567,
+    "IDSW": 162.0,
+    "IDF1": 33.89877641824249
+   }
+  }
+ },
+ "sort_th0.95": {
+  "config": {
+   "det_thresh": 0.95,
+   "max_age": 1,
+   "min_hits": 3,
+   "iou_threshold": 0.3
+  },
+  "detector": "minvis_cnxtb_dinov3_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.360499182035053,
+    "DetA": 15.958983260851076,
+    "AssA": 40.6597433906947,
+    "LocA": 82.07661644834168,
+    "MOTA": 16.878591288229842,
+    "IDSW": 104.0,
+    "IDF1": 25.406068035550106
+   }
+  }
+ }
+}

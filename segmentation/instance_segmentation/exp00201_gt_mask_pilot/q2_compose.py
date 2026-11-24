@@ -48,7 +48,11 @@ from lib_common.synthetic_data.prompts import BACKGROUND_TEMPLATE, CONTEXTS, bac
 
 
 def load_objects() -> dict[str, list]:
-    """Q1c の llm_v3 の物体を抜き出し直し、クラスごとの切り抜きの一覧にする。"""
+    """Q1c の llm_v3 の物体を抜き出し直し、クラスごとの切り抜きの一覧にする。
+
+    Returns:
+        {クラス名: [切り抜き]}。
+    """
     recs = json.loads((common.RUNS_DIR / "q1c" / "records.json").read_text())
     library: dict[str, list] = {}
     for r in recs:
@@ -66,6 +70,12 @@ def plan_scenes(n: int) -> list[dict]:
 
     q2b_fill.py でも、同じ場面を作り直すのに使う。プロンプトの文章の特徴をまとめて計算してから、文章を読む部分を CPU に退かせて、
     生成中の GPU のメモリを減らすために、生成の前に決めておく。
+
+    Args:
+        n: 場面の数。
+
+    Returns:
+        場面ごとの {場所・物体・置き方・プロンプト}。
     """
     library = load_objects()
     print("物体の数:", {k: len(v) for k, v in library.items()}, flush=True)
@@ -84,7 +94,14 @@ def plan_scenes(n: int) -> list[dict]:
 
 
 def coco_dict(entries: list[dict]) -> dict:
-    """[{file, height, width, objects: [(クラス名, マスク)]}] を COCO 形式にする。"""
+    """合成した画像の一覧を COCO 形式にする。
+
+    Args:
+        entries: [{file, height, width, objects: [(クラス名, マスク)]}]。
+
+    Returns:
+        COCO 形式の dict。
+    """
     to_id = name_to_ours(VOC20)
     images, anns = [], []
     for i, e in enumerate(entries, start=1):
@@ -118,6 +135,7 @@ def make_samples(n: int) -> None:
 
 
 def main() -> None:
+    """場面を決め、背景の作り方ごとに合成した画像と正解を作って保存する。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=40, help="作る場面の数")
     parser.add_argument("--samples", type=int, default=12, help="見本にする場面の数")

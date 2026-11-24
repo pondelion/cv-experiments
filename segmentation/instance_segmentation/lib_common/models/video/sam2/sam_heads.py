@@ -17,7 +17,10 @@ class PromptEncoder(nn.Module):
     """点・箱・マスクのプロンプトを埋め込む。
 
     Args:
-        dim: 埋め込みの次元。embed_size: 画像の特徴の (H, W)。input_size: 入力の (S, S)。mask_in_chans: マスクを縮める畳み込みの幅(16)。
+        dim: 埋め込みの次元。
+        embed_size: 画像の特徴の (H, W)。
+        input_size: 入力の (S, S)。
+        mask_in_chans: マスクを縮める畳み込みの幅(公式は 16)。
     """
 
     def __init__(self, dim: int, embed_size: tuple[int, int], input_size: tuple[int, int], mask_in_chans: int = 16):
@@ -34,11 +37,24 @@ class PromptEncoder(nn.Module):
         self.no_mask_embed = nn.Embedding(1, dim)
 
     def get_dense_pe(self) -> torch.Tensor:
-        """画像の特徴の格子の位置の埋め込み (1, C, H, W)。"""
+        """画像の特徴の格子の位置の埋め込み。
+
+        Returns:
+            (1, C, H, W)。
+        """
         return self.pe_layer(self.embed_size)[None]
 
     def _embed_points(self, points: torch.Tensor, labels: torch.Tensor, pad: bool) -> torch.Tensor:
-        """Args: points (B, N, 2) の (x, y)(入力の画素)、labels (B, N)(0 負・1 正・2 左上・3 右下・−1 点でない)。"""
+        """点を位置の埋め込み + ラベルの埋め込みにする。
+
+        Args:
+            points: (B, N, 2) の (x, y)(入力の画素)。
+            labels: (B, N)(0 負・1 正・2 左上・3 右下・−1 点でない)。
+            pad: 「点でない」点を 1 つ足すか(箱がないとき。公式と同じ)。
+
+        Returns:
+            (B, N(+1), C)。
+        """
         points = points + 0.5  # 画素の中心
         if pad:  # 箱がないときは「点でない」点を 1 つ足す(公式と同じ)
             points = torch.cat([points, points.new_zeros(points.shape[0], 1, 2)], dim=1)
@@ -50,9 +66,15 @@ class PromptEncoder(nn.Module):
         return emb
 
     def forward(self, points: tuple[torch.Tensor, torch.Tensor] | None, masks: torch.Tensor | None, batch: int):
-        """Args: points (座標 (B, N, 2), ラベル (B, N)) か None、masks (B, 1, 4H, 4W)(マスクの値)か None、batch: B。
+        """プロンプトを埋め込む(箱は点(ラベル 2・3)として渡す。SAM 2 の学習と同じ)。
 
-        Returns: (疎な埋め込み (B, N', C), 密な埋め込み (B, C, H, W))。箱は点(ラベル 2・3)として渡す(SAM 2 の学習と同じ)。
+        Args:
+            points: (座標 (B, N, 2), ラベル (B, N)) か None。
+            masks: マスクのプロンプト (B, 1, 4H, 4W)(マスクの値)か None。
+            batch: まとめの数 B。
+
+        Returns:
+            (疎な埋め込み (B, N', C), 密な埋め込み (B, C, H, W))。
         """
         dev = self.no_mask_embed.weight.device
         sparse = torch.empty(batch, 0, self.dim, device=dev)
@@ -69,7 +91,11 @@ class MaskDecoder(nn.Module):
     """マスクの decoder(SAM 2 の MaskDecoder。高解像度の特徴・物体らしさの head つき)。
 
     Args:
-        dim: 次元(256)。dynamic_multimask: 単一のマスクが不安定なとき複数マスクの最良に替える(公式の video predictor の推論の設定)。
+        dim: 次元(256)。
+        num_multimask: 複数マスクの数(公式は 3)。
+        dynamic_multimask: 単一のマスクが不安定なとき複数マスクの最良に替える(公式の video predictor の推論の設定)。
+        stability_delta: 安定さを測る値の幅 δ。
+        stability_thresh: 安定とみなす面積の比の閾値。
     """
 
     def __init__(self, dim: int = 256, num_multimask: int = 3, dynamic_multimask: bool = False,
@@ -91,10 +117,18 @@ class MaskDecoder(nn.Module):
 
     def forward(self, image: torch.Tensor, image_pe: torch.Tensor, sparse: torch.Tensor, dense: torch.Tensor,
                 multimask: bool, high_res: list[torch.Tensor]):
-        """Args: image (B, C, H, W)、image_pe (1, C, H, W)、sparse (B, N, C)、dense (B, C, H, W)、multimask: 3 つのマスクを出すか、
-        high_res: [stride 4 の特徴 (B, C/8, 4H, 4W), stride 8 の特徴 (B, C/4, 2H, 2W)](conv_s0・conv_s1 の後)。
+        """マスク・IoU の予測・物体らしさを出す。
 
-        Returns: (マスクの値 (B, M, 4H, 4W), IoU の予測 (B, M), 物体のポインタの元の token (B, M, C), 物体らしさの値 (B, 1))
+        Args:
+            image: 画像の特徴 (B, C, H, W)。
+            image_pe: その位置の埋め込み (1, C, H, W)。
+            sparse: 疎なプロンプトの埋め込み (B, N, C)。
+            dense: 密なプロンプトの埋め込み (B, C, H, W)。
+            multimask: 3 つのマスクを出すか。
+            high_res: [stride 4 の特徴 (B, C/8, 4H, 4W), stride 8 の特徴 (B, C/4, 2H, 2W)](conv_s0・conv_s1 の後)。
+
+        Returns:
+            (マスクの値 (B, M, 4H, 4W), IoU の予測 (B, M), 物体のポインタの元の token (B, M, C), 物体らしさの値 (B, 1))
             (M = 3(multimask)か 1)。
         """
         b = sparse.shape[0]
@@ -124,7 +158,15 @@ class MaskDecoder(nn.Module):
         return masks, iou, tok, obj
 
     def _dynamic(self, masks: torch.Tensor, iou: torch.Tensor):
-        """単一のマスクの安定さ(値 > δ と > −δ の面積の比)が閾値未満なら、複数マスクのうち IoU の予測が最良のものに替える。"""
+        """単一のマスクの安定さ(値 > δ と > −δ の面積の比)が閾値未満なら、複数マスクのうち IoU の予測が最良のものに替える。
+
+        Args:
+            masks: 全部のマスクの値 (B, 4, h, w)(先頭が単一のマスク)。
+            iou: 全部の IoU の予測 (B, 4)。
+
+        Returns:
+            (選んだマスクの値 (B, 1, h, w), その IoU の予測 (B, 1))。
+        """
         multi, multi_iou = masks[:, 1:], iou[:, 1:]
         best = multi_iou.argmax(-1)
         ar = torch.arange(len(best), device=best.device)

@@ -43,7 +43,14 @@ class ScaleBlock(nn.Module):
         self.norm = LayerNorm2d(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, C, h, w) -> (B, C, 2h, 2w)。"""
+        """特徴を 2 倍に上げる。
+
+        Args:
+            x: (B, C, h, w)。
+
+        Returns:
+            (B, C, 2h, 2w)。
+        """
         return self.norm(self.dw(F.gelu(self.up(x))))
 
 

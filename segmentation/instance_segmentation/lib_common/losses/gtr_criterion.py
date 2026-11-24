@@ -141,7 +141,9 @@ class GTRCriterion(nn.Module):
 
         Args:
             out: 1 つの出力({"logits": (B, M, K), ...})。
-            bi, qi, ti: _flat の返り値(画像・クエリ・正解の番号 (A,))。
+            bi: 割り当てた組の画像の番号 (A,)(_flat の返り値)。
+            qi: クエリの番号 (A,)。
+            ti: 正解の番号 (A,)。
             tg: targets_from_masks の返り値。
             ious: 割り当てた組の IoU (A,)。
             n: 損失を割る数。
@@ -163,7 +165,9 @@ class GTRCriterion(nn.Module):
 
         Args:
             out: 1 つの出力({"boxes": (B, M, 4) cx, cy, w, h, ...})。
-            bi, qi, ti: 画像・クエリ・正解の番号 (A,)。
+            bi: 割り当てた組の画像の番号 (A,)。
+            qi: クエリの番号 (A,)。
+            ti: 正解の番号 (A,)。
             tg: targets_from_masks の返り値。
             n: 損失を割る数。
 
@@ -185,7 +189,9 @@ class GTRCriterion(nn.Module):
 
         Args:
             out: 1 つの出力({"corners": (B, M, 4·R), "refs": (B, M, 4), ...})。
-            bi, qi, ti: 画像・クエリ・正解の番号 (A,)。
+            bi: 割り当てた組の画像の番号 (A,)。
+            qi: クエリの番号 (A,)。
+            ti: 正解の番号 (A,)。
             tg: targets_from_masks の返り値。
             ious: 割り当てた組の IoU (A,)(重み)。
             n: 損失を割る数。
@@ -211,7 +217,8 @@ class GTRCriterion(nn.Module):
         Args:
             out: 途中の層の出力({"corners": (B, M, 4·R), "boxes", ...})。
             teacher: 最後の層の出力({"corners", "logits": (B, M, K)})。
-            bi, qi: 割り当てた組の画像・クエリの番号 (A,)。
+            bi: 割り当てた組の画像の番号 (A,)。
+            qi: 割り当てた組のクエリの番号 (A,)。
             ious: 割り当てた組の IoU (A,)。
             cache: 正例・負例の数の重みを置く辞書(検出の出力で計算し、denoising で使い回す)。
             is_dn: denoising の出力か。

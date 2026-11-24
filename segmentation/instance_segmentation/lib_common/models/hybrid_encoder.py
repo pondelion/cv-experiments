@@ -55,17 +55,34 @@ class RepBlock(nn.Module):
         self.fused = None  # fuse_() の後は、2 つの枝と BN をまとめた 1 つの 3×3 の畳み込み
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, c, h, w) -> (B, c, h, w)。"""
+        """3×3 と 1×1 の枝の和に SiLU をかける(fuse_ の後は 1 つの 3×3)。
+
+        Args:
+            x: (B, c, h, w)。
+
+        Returns:
+            (B, c, h, w)。
+        """
         if self.fused is not None:
             return F.silu(self.fused(x))
         return F.silu(self.conv3(x) + self.conv1(x))
 
     @torch.no_grad()
     def fuse_(self) -> None:
-        """推論用に、3×3 + BN と 1×1 + BN の 2 つの枝を 1 つの 3×3 の畳み込み(bias あり)にまとめる(RepVGG の
-        re-parameterization。計算は同じ。exp00104 の E4)。BN は推論のときの統計(running_mean・running_var)を使う。"""
+        """推論用に、3×3 + BN と 1×1 + BN の 2 つの枝を 1 つの 3×3 の畳み込み(bias あり)にまとめる。
+
+        RepVGG の re-parameterization で、計算は同じ(exp00104 の E4)。BN は推論のときの統計(running_mean・running_var)を使う。
+        まとめた畳み込みは self.fused に入れ、forward はそれを使う(返り値なし)。
+        """
         def conv_bn_weights(seq: nn.Sequential) -> tuple[torch.Tensor, torch.Tensor]:
-            """畳み込み + BN を、1 つの畳み込みの (重み, bias) にする。"""
+            """畳み込み + BN を、1 つの畳み込みの (重み, bias) にする。
+
+            Args:
+                seq: (畳み込み, BN) の nn.Sequential。
+
+            Returns:
+                (重み, bias)。
+            """
             conv, bn = seq[0], seq[1]
             scale = bn.weight / torch.sqrt(bn.running_var + bn.eps)  # (c,)
             return conv.weight * scale[:, None, None, None], bn.bias - bn.running_mean * scale
@@ -90,7 +107,14 @@ class DWBlock(nn.Module):
         self.dw, self.pw = conv_bn(c, c, 3, groups=c, act=False), conv_bn(c, c, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, c, h, w) -> (B, c, h, w)。"""
+        """depthwise → pointwise の畳み込みをかける。
+
+        Args:
+            x: (B, c, h, w)。
+
+        Returns:
+            (B, c, h, w)。
+        """
         return self.pw(self.dw(x))
 
 
@@ -110,7 +134,14 @@ class CSPBlock(nn.Module):
         self.blocks = nn.Sequential(*[(RepBlock if block == "rep" else DWBlock)(cout) for _ in range(n)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, cin, h, w) -> (B, cout, h, w)。"""
+        """2 つに分け、片方だけ block を通して足す。
+
+        Args:
+            x: (B, cin, h, w)。
+
+        Returns:
+            (B, cout, h, w)。
+        """
         a, b = self.split(x).chunk(2, dim=1)  # (B, 2·cout, h, w) -> 2 × (B, cout, h, w)
         return a + self.blocks(b)
 
@@ -135,7 +166,14 @@ class FuseBlock(nn.Module):
         self.out = conv_bn(wide + 2 * mid, cout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, cin, h, w) -> (B, cout, h, w)。"""
+        """2 つに分けた片方を 2 段の CSP に通し、途中の出力も全部つなげて出力の畳み込みにかける。
+
+        Args:
+            x: (B, cin, h, w)。
+
+        Returns:
+            (B, cout, h, w)。
+        """
         a, b = self.inp(x).chunk(2, dim=1)  # (B, wide, h, w) -> 2 × (B, wide/2, h, w)
         c = self.csp1(b)  # (B, mid, h, w)
         d = self.csp2(c)  # (B, mid, h, w)
@@ -184,7 +222,14 @@ class AIFILayer(nn.Module):
         self.norm1, self.norm2 = nn.LayerNorm(dim), nn.LayerNorm(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, C, h, w) -> (B, C, h, w)。位置の埋め込みは注意の問いと鍵にだけ足す。"""
+        """画素をトークンにして transformer の 1 層をかける(位置の埋め込みは注意の問いと鍵にだけ足す)。
+
+        Args:
+            x: (B, C, h, w)。
+
+        Returns:
+            (B, C, h, w)。
+        """
         b, c, h, w = x.shape
         tokens = rearrange(x, "b c h w -> b (h w) c")  # (B, N, C)
         pos = sincos_pos_2d(h, w, c, x.device).to(x.dtype)  # (N, C)

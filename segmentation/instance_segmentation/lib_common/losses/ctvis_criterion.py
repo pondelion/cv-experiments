@@ -39,7 +39,12 @@ class _Tracklet:
         self.fused, self.exist_frames = None, 0
 
     def update(self, embed: torch.Tensor | None, negative: torch.Tensor) -> None:
-        """1 フレーム分を入れる。Args: embed (1, C) か None、negative (負例の数, C)。"""
+        """1 フレーム分を入れ、混ぜた埋め込みを更新する。
+
+        Args:
+            embed: その物体のクエリの埋め込み (1, C)(写っていないフレームは None)。
+            negative: 負例 (負例の数, C)。
+        """
         self.embeds.append(embed)
         self.negatives.append(negative)
         if embed is not None:
@@ -54,7 +59,15 @@ class _Tracklet:
         self.fused_list.append(self.fused)
 
     def samples(self, t: int, momentum: bool = True):
-        """フレーム t の (anchor, 正例, 負例)(正例がなければ None)。"""
+        """フレーム t の対照学習の組を作る。
+
+        Args:
+            t: フレームの番号。
+            momentum: 確率 0.5 で、正例に 1 つ前のフレームでの混ぜた埋め込みを使うか(公式の既定 True)。
+
+        Returns:
+            (anchor (1, C), 正例 (1, C) か None(前にも後にも写っていない), 負例 (負例の数, C)(1 つ前のフレームで入れたもの))。
+        """
         anchor, positive = self.embeds[t], None
         if any(e is not None for e in self.embeds[:t]):  # 前に写っている
             if momentum and np.random.rand() > 0.5:
@@ -104,7 +117,9 @@ class CTVISCriterion(Mask2FormerCriterion):
         self.num_frames, self.num_negatives, self.momentum_embed = num_frames, num_negatives, momentum_embed
 
     def forward(self, outs: list[dict], targets: list[dict], match_outs=None) -> tuple[torch.Tensor, dict]:
-        """Args:
+        """区間ごとの損失(画像の損失 + reid の対照学習)。
+
+        Args:
             outs: Mask2Former の層ごとの予測(画像は (b t) の順に B·T 枚)。最後の要素に "reid" (B·T, Q, C)。
             targets: 区間ごとの {"labels": (N,), "masks": (N, T, S, S)}(長さ B)。
             match_outs: 使わない(ほかの動画の損失と呼び方をそろえるため)。

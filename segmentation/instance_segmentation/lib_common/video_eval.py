@@ -19,7 +19,14 @@ from pycocotools.cocoeval import COCOeval
 
 
 def _avg_area(segs: list) -> float:
-    """写っているフレームのマスクの面積の平均(公式の avg_area と同じ。どのフレームにも写っていなければ 0)。"""
+    """写っているフレームのマスクの面積の平均(公式の avg_area と同じ)。
+
+    Args:
+        segs: フレームごとの RLE(写っていないフレームは None)。
+
+    Returns:
+        面積の平均(どのフレームにも写っていなければ 0)。
+    """
     a = [float(mask_util.area(s)) for s in segs if s]
     return float(np.mean(a)) if a else 0.0
 
@@ -47,7 +54,15 @@ def video_iou(d_seq: list, g_seq: list) -> float:
 
 
 def _to_coco(gt: dict, anns: list[dict]) -> COCO:
-    """動画を画像、物体を 1 つの注釈とした pycocotools の COCO を作る(COCOeval に渡すため)。"""
+    """動画を画像、物体を 1 つの注釈とした pycocotools の COCO を作る(COCOeval に渡すため)。
+
+    Args:
+        gt: 正解のセット(videos・categories を使う)。
+        anns: 物体の並び(正解か予測)。
+
+    Returns:
+        pycocotools の COCO。
+    """
     c = COCO()
     c.dataset = {"images": [{"id": v["id"]} for v in gt["videos"]], "categories": gt["categories"],
                  "annotations": [dict(a, image_id=a["video_id"], area=_avg_area(a["segmentations"]), iscrowd=a.get("iscrowd", 0),
@@ -61,6 +76,15 @@ class VideoCOCOeval(COCOeval):
     """COCOeval の IoU の計算だけを、動画を通した IoU にしたもの。"""
 
     def computeIoU(self, img_id, cat_id):  # noqa: N802(COCOeval の名前に合わせる)
+        """1 本の動画・1 クラスの、予測と正解の動画の IoU(video_iou。点数の上位 maxDets 個の予測)。
+
+        Args:
+            img_id: 動画の ID。
+            cat_id: クラスの ID。
+
+        Returns:
+            (予測の数, 正解の数) の IoU(どちらもなければ [])。
+        """
         p = self.params
         gt = self._gts[img_id, cat_id] if p.useCats else [g for c in p.catIds for g in self._gts[img_id, c]]
         dt = self._dts[img_id, cat_id] if p.useCats else [d for c in p.catIds for d in self._dts[img_id, c]]
@@ -127,6 +151,15 @@ def evaluate_frames(gt: dict, predictions: list[dict]) -> dict:
     images = [{"id": frame_id(v["id"], t), "height": v["height"], "width": v["width"]}
               for v in gt["videos"] for t in range(v["length"])]
     def per_frame(objs: list[dict], with_score: bool) -> list[dict]:
+        """物体ごとの動画の注釈を、フレームごとの画像の注釈に分ける。
+
+        Args:
+            objs: 物体の並び(正解か予測)。
+            with_score: 予測なら True(点数を写す)。
+
+        Returns:
+            フレームの画像ごとの COCO の注釈の並び。
+        """
         out = []
         for o in objs:
             for t, rle in enumerate(o["segmentations"]):
@@ -140,6 +173,14 @@ def evaluate_frames(gt: dict, predictions: list[dict]) -> dict:
                 out.append(d)
         return out
     def coco(anns: list[dict]) -> COCO:
+        """フレームの画像の注釈から pycocotools の COCO を作る。
+
+        Args:
+            anns: per_frame の返り値。
+
+        Returns:
+            pycocotools の COCO。
+        """
         c = COCO()
         c.dataset = {"images": images, "categories": gt["categories"], "annotations": anns}
         with contextlib.redirect_stdout(io.StringIO()):
@@ -161,14 +202,28 @@ def evaluate_frames(gt: dict, predictions: list[dict]) -> dict:
 
 # ---- J&F(マスクを与えて追う方式の、伝搬だけの出来。DAVIS の公式の評価 davis2017-evaluation と同じ計算) ----
 def _disk(r: int) -> np.ndarray:
-    """半径 r の円の構造要素(skimage.morphology.disk と同じ: x² + y² ≤ r² の格子点)。"""
+    """半径 r の円の構造要素(skimage.morphology.disk と同じ: x² + y² ≤ r² の格子点)。
+
+    Args:
+        r: 半径(画素)。
+
+    Returns:
+        (2r + 1, 2r + 1) の uint8。
+    """
     ax = np.arange(-r, r + 1)
     x, y = np.meshgrid(ax, ax)
     return (x ** 2 + y ** 2 <= r ** 2).astype(np.uint8)
 
 
 def _seg2bmap(seg: np.ndarray) -> np.ndarray:
-    """マスクの輪郭の 1 画素の幅の地図(公式の _seg2bmap。大きさは変えない場合)。"""
+    """マスクの輪郭の 1 画素の幅の地図(公式の _seg2bmap。大きさは変えない場合)。
+
+    Args:
+        seg: (H, W) の 0/1。
+
+    Returns:
+        (H, W) の bool。
+    """
     seg = seg.astype(bool)
     e, s, se = np.zeros_like(seg), np.zeros_like(seg), np.zeros_like(seg)
     e[:, :-1], s[:-1, :], se[:-1, :-1] = seg[:, 1:], seg[1:, :], seg[1:, 1:]
@@ -180,14 +235,31 @@ def _seg2bmap(seg: np.ndarray) -> np.ndarray:
 
 
 def j_score(gt: np.ndarray, pred: np.ndarray) -> float:
-    """J: 領域の IoU(両方とも空なら 1。公式の db_eval_iou)。Args: (H, W) の 0/1。"""
+    """J: 領域の IoU(公式の db_eval_iou)。
+
+    Args:
+        gt: 正解 (H, W) の 0/1。
+        pred: 予測 (H, W) の 0/1。
+
+    Returns:
+        IoU(両方とも空なら 1)。
+    """
     gt, pred = gt.astype(bool), pred.astype(bool)
     union = np.sum(gt | pred)
     return 1.0 if np.isclose(union, 0) else float(np.sum(gt & pred) / union)
 
 
 def f_score(gt: np.ndarray, pred: np.ndarray, bound_th: float = 0.008) -> float:
-    """F: 輪郭の一致度(輪郭の画素の適合率と再現率の F 値。許容の幅は対角線 × 0.008 の切り上げ。公式の f_measure)。"""
+    """F: 輪郭の一致度(輪郭の画素の適合率と再現率の F 値。公式の f_measure)。
+
+    Args:
+        gt: 正解 (H, W) の 0/1。
+        pred: 予測 (H, W) の 0/1。
+        bound_th: 輪郭の一致を許す幅(1 未満なら対角線に対する割合で、画素は切り上げ。公式は 0.008)。
+
+    Returns:
+        F 値。
+    """
     import cv2
     bound_pix = bound_th if bound_th >= 1 else int(np.ceil(bound_th * np.linalg.norm(pred.shape)))
     fg_b, gt_b = _seg2bmap(pred), _seg2bmap(gt)

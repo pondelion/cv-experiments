@@ -33,6 +33,7 @@ def sine_pos(x: torch.Tensor, temperature: float = 10000.0) -> torch.Tensor:
 
     Args:
         x: 特徴 (B(画像の数), C(特徴の次元), H(縦の画素数), W(横の画素数))。形と型だけを使う。
+        temperature: 周波数の底。
 
     Returns:
         x と同じ形 (B, C, H, W) の位置の埋め込み。チャンネルの前半 C/2 が縦の位置、後半 C/2 が横の位置。
@@ -551,7 +552,13 @@ class Mask2Former(nn.Module):
         2. マスクを作る特徴に k × k の平均の窓をかけ、境界の画素で平均する(境界がなければ 0)
         公式の窓は畳み込みの重み (C, C, k, k) を全部 1/k² にしたもので、各出力の次元が「全部の入力の次元の和」の k × k の平均になる
         (出力の C 次元は全部同じ値)。ここでは同じ値を、次元の和に k × k の平均(外は 0 として数える)をかけて計算する(同じ計算で速い)。
-        Args: masks (B, Q, h, w)、mask_feat (B, C, h, w)。Returns: (B, Q, C)。
+
+        Args:
+            masks: 最後の層の予測マスクの値 (B, Q, h, w)。
+            mask_feat: マスクを作る特徴 (B, C, h, w)。
+
+        Returns:
+            (B, Q, C)。
         """
         k = self.context_filter_size
         m = (masks.detach() > 0).to(mask_feat.dtype)

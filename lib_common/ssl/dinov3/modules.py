@@ -40,7 +40,11 @@ class MaskableViT(nn.Module):
 
     @staticmethod
     def _qk(attn: nn.Module, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """注意の層の q・k を、層の入力 x (B, T, C) から計算する(timm の Attention・EvaAttention の両方。RoPE をかける前)。
+        """注意の層の q・k を、層の入力から計算する(timm の Attention・EvaAttention の両方。RoPE をかける前)。
+
+        Args:
+            attn: timm の注意の層。
+            x: 層の入力 (B, T, C)。
 
         Returns:
             (q, k)。どちらも (B, 頭の数, T, 頭の次元)。
@@ -58,7 +62,9 @@ class MaskableViT(nn.Module):
         return attn.q_norm(q), attn.k_norm(k)
 
     def forward(self, x: torch.Tensor, masks: torch.Tensor | None = None, return_last_qk: bool = False) -> dict:
-        """Args:
+        """ViT に通し、[CLS]・register・パッチのトークンを分けて返す。
+
+        Args:
             x: (B, 3, H, W)。
             masks: (B, N) の bool(True のパッチを mask token に置き換える。None なら置き換えない)。
             return_last_qk: 最後の層の q・k と [CLS] からの注意も返す(DoRA が物体を見つけ・追うのに使う)。
@@ -116,13 +122,24 @@ class DINOHead(nn.Module):
 
     @staticmethod
     def _init(m: nn.Module) -> None:
-        """公式と同じ初期値(線形の層の重みは標準偏差 0.02 の切断正規分布、bias は 0)。"""
+        """公式と同じ初期値(線形の層の重みは標準偏差 0.02 の切断正規分布、bias は 0)。
+
+        Args:
+            m: 初期化する層。
+        """
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(M, C) -> (M, K)。"""
+        """MLP → L2 正規化 → 最後の層で prototype の値にする。
+
+        Args:
+            x: (M, C)。
+
+        Returns:
+            (M, K)(K = prototype の数)。
+        """
         x = F.normalize(self.mlp(x), dim=-1, eps=1e-6 if x.dtype == torch.float16 else 1e-12)
         return self.last_layer(x)

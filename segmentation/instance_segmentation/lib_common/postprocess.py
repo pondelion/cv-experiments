@@ -143,7 +143,7 @@ def yolo_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, coef: torch.T
 
 @torch.no_grad()
 def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torch.Tensor, metas: list[dict],
-                          pad_size: int | None = None, crop_to_box: bool = False) -> list[dict]:
+                          pad_size: int | None = None, crop_to_box: bool = False, min_score: float = 0.0) -> list[dict]:
     """RF-DETR 系(クラスが sigmoid)の最終の予測を、COCO の結果の形式にする(公式の PostProcess と同じ手順)。
 
     1. クラスの確率(sigmoid)を Q × K 個並べ、上位 TOP_K 個(クエリ, クラス)を選ぶ。スコア = その確率
@@ -159,6 +159,8 @@ def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torc
             (長い辺をこの S にして右と下を埋めた入力。GTR 系など)。
         crop_to_box: True なら、各マスクの予測の枠の外を 0 にする(D-FINE-seg の cleanup_masks と同じ。枠の中だけでマスクの
             損失を掛ける学習(GTR 系の mask_loss="box_crop")では、枠の外を学習しないため)。
+        min_score: この点数より低い予測を、マスクを元の大きさにする前に捨てる(既定 0 は捨てない。画像の評価は捨てない。
+            mot/ の検出の保存で、点数の低い予測のマスクの計算を省くため)。
 
     Returns:
         予測の並び。各要素は {"image_id", "category_id"(1 始まり), "segmentation"(RLE), "score", "bbox"}。
@@ -168,6 +170,11 @@ def rfdetr_to_predictions(logits: torch.Tensor, boxes: torch.Tensor, masks: torc
         prob = logits[i].float().sigmoid()  # (Q, K)
         k = prob.shape[1]
         scores, idx = rearrange(prob, "q k -> (q k)").topk(min(TOP_K, prob.numel()))  # (Q × K,) から上位 R 個
+        if min_score > 0:
+            keep = scores >= min_score
+            scores, idx = scores[keep], idx[keep]
+            if len(idx) == 0:  # 点数が min_score 以上の予測がない画像(予測なし)
+                continue
         qi, labels = idx // k, idx % k  # (R,)
         h, w = meta["orig_size"]
         m = rearrange(masks[i, qi].float(), "r h w -> 1 r h w")

@@ -44,7 +44,13 @@ MATCH_COEFF = (1.0, 2.0, 10.0)  # 公式の match_coeff(検出の点数の log�
 
 
 class TrackHead(nn.Module):
-    """追跡の head(公式の TrackHead。dynamic、平均プーリングなし)。"""
+    """追跡の head(公式の TrackHead。dynamic、平均プーリングなし)。
+
+    Args:
+        in_channels: RoI の特徴のチャンネル。
+        roi_size: RoI の特徴の一辺。
+        hidden: 全結合の次元(公式は 1024)。
+    """
 
     def __init__(self, in_channels: int = 256, roi_size: int = 7, hidden: int = 1024):
         super().__init__()
@@ -54,19 +60,41 @@ class TrackHead(nn.Module):
             nn.init.zeros_(fc.bias)
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
-        """Args: x (n, 256, 7, 7)。Returns: (n, 1024)(最後の層の後に ReLU はない)。"""
+        """RoI の特徴を埋め込みにする。
+
+        Args:
+            x: (n, 256, 7, 7)。
+
+        Returns:
+            (n, 1024)(最後の層の後に ReLU はない)。
+        """
         x = F.relu(self.fcs[0](x.flatten(1)))
         return self.fcs[1](x)
 
     def forward(self, x: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
-        """Args: x (n, 256, 7, 7)、ref (m, 256, 7, 7) か埋め込み済みの (m, 1024)。Returns: 照合の値 (n, m + 1)(列 0 = 新しい物体)。"""
+        """今の物体と参照の物体の照合の値(埋め込みの内積。先頭に新しい物体の列 0)。
+
+        Args:
+            x: 今の物体の RoI の特徴 (n, 256, 7, 7)。
+            ref: 参照の物体の RoI の特徴 (m, 256, 7, 7) か、埋め込み済みの (m, 1024)。
+
+        Returns:
+            照合の値 (n, m + 1)(列 0 = 新しい物体)。
+        """
         e = self.embed(x)
         r = ref if ref.dim() == 2 else self.embed(ref)
         return torch.cat([e.new_zeros(len(e), 1), e @ r.T], 1)
 
 
 def gt_boxes(masks: torch.Tensor) -> torch.Tensor:
-    """正解のマスク (N, S, S) から枠 (N, 4)(MaskRCNNSeg と同じ: 端の画素の外の端まで)。"""
+    """正解のマスクから枠を作る(MaskRCNNSeg と同じ: 端の画素の外の端まで)。
+
+    Args:
+        masks: (N, S, S)。
+
+    Returns:
+        (N, 4) の (x0, y0, x1, y1)。
+    """
     if not len(masks):
         return masks.new_zeros((0, 4), dtype=torch.float32)
     b = masks_to_boxes(masks).float()
@@ -91,7 +119,16 @@ class MaskTrackRCNN(nn.Module):
         rh = self.seg.model.roi_heads
         select = rh.select_training_samples
 
-        def select_and_keep(proposals, targets):  # box の head の学習の候補の選び方の結果を、追跡の損失のために残す
+        def select_and_keep(proposals, targets):
+            """box の head の学習の候補を選び(torchvision の select_training_samples)、結果を追跡の損失のために残す。
+
+            Args:
+                proposals: 画像ごとの候補の枠。
+                targets: 画像ごとの正解。
+
+            Returns:
+                select_training_samples の返り値(候補, 割り当てた正解の番号, クラス(0 = 背景), 回帰の正解)。
+            """
             out = select(proposals, targets)
             self._sampled = out  # (候補, 割り当てた正解の番号, クラス(0 = 背景), 回帰の正解)
             return out
@@ -149,7 +186,14 @@ class MaskTrackRCNN(nn.Module):
     def track_video(self, frames: torch.Tensor, valid: tuple[int, int], orig: tuple[int, int], chunk: int = 4) -> list[dict]:
         """1 本の動画を時刻の順に追跡する(公式の simple_test_bboxes の記憶と照合)。
 
-        Returns: ID ごとの {"oid", "label", "score", "masks": {t: 元の大きさの RLE}}(点数 = 平均、クラス = 多数決)。
+        Args:
+            frames: (T, 3, S, S)(評価の変換)。
+            valid: 入力の中の画像の部分 (縦, 横)。
+            orig: 元の大きさ (縦, 横)。
+            chunk: 検出をまとめて処理するフレームの数。
+
+        Returns:
+            ID ごとの {"oid", "label", "score", "masks": {t: 元の大きさの RLE}}(点数 = 平均、クラス = 多数決)。
         """
         model = self.seg.model
         mem_feat = mem_box = mem_label = None
@@ -202,6 +246,19 @@ class MaskTrackRCNN(nn.Module):
 
     def to_predictions(self, tracks: list[dict], video_id: int, cat_ids: list[int], size: int, valid: tuple[int, int],
                        orig: tuple[int, int], t_all: int) -> list[dict]:
-        """ID ごとの予測を評価の形にする(マスクは track_video で元の大きさの RLE 済み)。"""
+        """ID ごとの予測を評価の形にする(マスクは track_video で元の大きさの RLE 済み)。
+
+        Args:
+            tracks: track_video の返り値。
+            video_id: 動画の ID。
+            cat_ids: クラスの番号 → カテゴリーの id。
+            size: 使わない(ほかの方式と呼び方をそろえるため)。
+            valid: 使わない(同上)。
+            orig: 使わない(同上)。
+            t_all: 動画のフレームの数。
+
+        Returns:
+            評価の予測 [{"video_id", "category_id", "score", "segmentations", "query"}]。
+        """
         return [{"video_id": video_id, "category_id": cat_ids[tr["label"]], "score": tr["score"],
                  "segmentations": [tr["masks"].get(t) for t in range(t_all)], "query": tr["oid"]} for tr in tracks]

@@ -50,7 +50,17 @@ def propagate(model: SAM2, frames: torch.Tensor, prompts: dict[int, torch.Tensor
 
 
 def to_input_mask(rle: dict, valid: tuple[int, int], size: int, device) -> torch.Tensor:
-    """元の大きさの RLE を、評価の変換(長い辺を S に縮めて右と下を埋める)と同じ形の (S, S) の bool にする。"""
+    """元の大きさの RLE を、評価の変換(長い辺を S に縮めて右と下を埋める)と同じ形のマスクにする。
+
+    Args:
+        rle: 元の大きさの RLE。
+        valid: 入力の中の画像の部分 (縦, 横)。
+        size: 入力の一辺 S。
+        device: 作る device。
+
+    Returns:
+        (S, S) の bool。
+    """
     m = torch.as_tensor(mask_util.decode(rle), device=device)[None, None].float()
     m = F.interpolate(m, size=valid, mode="nearest")[0, 0] > 0.5
     out = torch.zeros(size, size, dtype=torch.bool, device=device)
@@ -59,7 +69,16 @@ def to_input_mask(rle: dict, valid: tuple[int, int], size: int, device) -> torch
 
 
 def to_orig_rles(logits: torch.Tensor, valid: tuple[int, int], orig: tuple[int, int]) -> list:
-    """入力の大きさのマスクの値 (T, S, S) を、元の大きさのフレームごとの RLE(物体がなければ None)にする。"""
+    """入力の大きさのマスクの値を、元の大きさのフレームごとの RLE にする。
+
+    Args:
+        logits: マスクの値 (T, S, S)。
+        valid: 入力の中の画像の部分 (縦, 横)。
+        orig: 元の大きさ (縦, 横)。
+
+    Returns:
+        フレームごとの RLE(物体がなければ None)の並び。
+    """
     m = logits[:, None, : valid[0], : valid[1]]
     m = F.interpolate(m, size=orig, mode="bilinear", align_corners=False)[:, 0] > 0
     out = []

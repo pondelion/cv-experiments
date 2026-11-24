@@ -117,7 +117,8 @@ def is_usable(stats: dict, max_bg_spread: float = 20.0, min_area: float = 0.02, 
     Args:
         stats: key_mask・dominance_key_mask が返したマスクの状態を表す値。
         max_bg_spread: 背景の色のばらつきの上限。
-        min_area, max_area: 物体の面積の、画像の面積に対する割合の範囲。
+        min_area: 物体の面積の、画像の面積に対する割合の下限。
+        max_area: 同じ割合の上限。
 
     Returns:
         使えるなら True。

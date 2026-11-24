@@ -17,6 +17,7 @@ MODELS = ["sam3"] + [f"rfdetr_{s}" for s in ["nano", "large", "2xlarge"]]
 
 
 def main() -> None:
+    """セットごとに、正解と各モデルの予測の見本の画像を作る。"""
     for set_name in SAMPLE_COUNTS:
         render(SAMPLES_DIR, set_name, "gt")
         for model in MODELS:

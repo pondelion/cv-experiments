@@ -28,7 +28,8 @@ class ConvBNSiLU(nn.Sequential):
     """畳み込み + BatchNorm + SiLU(YOLO 系の基本の層)。
 
     Args:
-        cin, cout: 入力・出力のチャンネル。
+        cin: 入力のチャンネル。
+        cout: 出力のチャンネル。
         k: 窓の大きさ。
         s: stride。
         g: groups(cin と同じなら depthwise)。
@@ -65,7 +66,8 @@ class C3k2(nn.Module):
     """C3k2(c3k=False の形): 1×1 で 2 つに分け、片方に Bottleneck を n 回重ね、途中の出力も全部つなげて 1×1 で混ぜる。
 
     Args:
-        cin, cout: 入力・出力のチャンネル。
+        cin: 入力のチャンネル。
+        cout: 出力のチャンネル。
         n: Bottleneck の数。
     """
 

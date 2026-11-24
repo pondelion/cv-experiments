@@ -98,6 +98,11 @@ def main() -> None:
         torch.set_num_threads(t)
 
         def torch_fn(m=model):
+            """PyTorch で 1 回推論する(遅延を測る対象)。
+
+            Args:
+                m: 測るモデル(既定は全体のモデル)。
+            """
             with torch.inference_mode():
                 m(xt)
 

@@ -19,6 +19,7 @@ from lib_common.ssl.dinov3 import train as dinov3
 
 
 def main() -> None:
+    """選んだ方式(--method)の自己教師ありの事前学習を行う。"""
     p = argparse.ArgumentParser()
     p.add_argument("--method", required=True, choices=["dinov3", "dora", "vjepa"])
     p.add_argument("--name", required=True)

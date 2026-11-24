@@ -58,7 +58,8 @@ class ConvLNSiLU(nn.Sequential):
     """畳み込み(bias なし)→ チャンネルの LayerNorm → SiLU(公式の ConvX を layer_norm=True・act="silu" で使ったもの)。
 
     Args:
-        cin, cout: 入力・出力のチャンネルの数。
+        cin: 入力のチャンネルの数。
+        cout: 出力のチャンネルの数。
         k: 畳み込みの大きさ。
     """
 
@@ -72,7 +73,8 @@ class C2f(nn.Module):
     1×1 で 2 つに分け、片方を 3×3 の畳み込み 2 つの組に n 回通し、途中の結果を全部つなげて 1×1 で cout にする。
 
     Args:
-        cin, cout: 入力・出力のチャンネルの数。
+        cin: 入力のチャンネルの数。
+        cout: 出力のチャンネルの数。
         n: 3×3 の組の数(公式は 3)。
     """
 
@@ -136,7 +138,9 @@ class MLP(nn.Module):
     """全結合の層を重ねたもの(間は ReLU。公式の MLP と同じ)。
 
     Args:
-        din, dhidden, dout: 入力・中間・出力の次元。
+        din: 入力の次元。
+        dhidden: 中間の次元。
+        dout: 出力の次元。
         layers: 層の数。
     """
 
@@ -463,7 +467,8 @@ class RFDETRSeg(nn.Module):
 
         Args:
             b: 画像の数。
-            h, w: P4 の縦・横。
+            h: P4 の縦。
+            w: P4 の横。
             device: 置く装置。
 
         Returns:

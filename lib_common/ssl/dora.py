@@ -111,6 +111,12 @@ def read_clip(path: str, num_frames: int, step_sec: float, rng: random.Random) -
     開始の位置へ 1 回だけ飛び(seek)、そこから順に復号して、使うフレームだけを画像にする(grab は復号だけで画像にしない)。
     フレームごとに飛ぶと、そのたびに手前のキーフレームから復号し直すので、CPU の時間が約 3 倍かかる(取り出すフレームは同じ)。
 
+    Args:
+        path: 動画のファイル。
+        num_frames: 読むフレームの数。
+        step_sec: フレームの間隔(秒)。
+        rng: 開始の位置を選ぶ乱数。
+
     Returns:
         (T, H, W, 3) の uint8(RGB)。
     """
@@ -158,7 +164,14 @@ class VideoClipAugmentation:
         self.n_local = cfg.local_crops_number
 
     def __call__(self, clip: np.ndarray) -> dict:
-        """Args: clip: (T, H, W, 3) の uint8。Returns: {"global": (T, 3, G, G), "local": (n, T, 3, L, L)}。"""
+        """区間に、フレームで同じ位置の大域の切り抜きと、局所の切り抜き n 組を作る。
+
+        Args:
+            clip: (T, H, W, 3) の uint8。
+
+        Returns:
+            {"global": (T, 3, G, G), "local": (n, T, 3, L, L)}。
+        """
         video = self.init_crop(torch.from_numpy(rearrange(clip, "t h w c -> t c h w")))  # (T, 3, 300, 300) 区間で同じ位置
         g = self.global_crop(video)  # (T, 3, G, G) 区間で同じ位置
         glob = torch.stack([self.global_frame(f) for f in g])
@@ -178,9 +191,25 @@ class VideoClipDataset(Dataset):
         self.paths, self.cfg, self.aug = list(paths), cfg, VideoClipAugmentation(cfg)
 
     def __len__(self) -> int:
+        """動画の数を返す。
+
+        Returns:
+            動画の数。
+        """
         return len(self.paths)
 
     def __getitem__(self, i: int) -> dict:
+        """i 番目の動画から区間を読み、切り抜きを作る(読めない動画は、別の無作為な動画で 5 回まで代える)。
+
+        Args:
+            i: 動画の番号。
+
+        Returns:
+            VideoClipAugmentation の出力。
+
+        Raises:
+            RuntimeError: 5 回続けて読めなかったとき。
+        """
         rng = random.Random()
         for _ in range(5):  # 読めない動画は別の動画で代える
             try:
@@ -196,6 +225,8 @@ def sinkhorn_assign(logits: torch.Tensor, eps: float, n_iter: int) -> torch.Tens
 
     Args:
         logits: (B, N(パッチ), K(物体))。
+        eps: 温度(logits / eps の exp から始める)。
+        n_iter: 正規化のくり返しの回数。
 
     Returns:
         (B, K, N)。各物体の行は、パッチの上の割り当ての重み。
@@ -262,19 +293,39 @@ class DoRA(nn.Module):
         self.register_buffer("center", torch.zeros(1, cfg.out_dim))
 
     def train(self, mode: bool = True):
+        """学習の状態を切り替える(先生は常に推論の形)。
+
+        Args:
+            mode: True で学習の状態。
+
+        Returns:
+            self。
+        """
         super().train(mode)
         self.teacher.eval()
         return self
 
     @torch.no_grad()
     def update_ema(self, momentum: float) -> None:
-        """先生 ← momentum × 先生 + (1 − momentum) × 学生。"""
+        """先生を学生の EMA で更新する(先生 ← momentum × 先生 + (1 − momentum) × 学生)。
+
+        Args:
+            momentum: EMA の係数。
+        """
         s, t = list(self.student.parameters()), list(self.teacher.parameters())
         torch._foreach_mul_(t, momentum)
         torch._foreach_add_(t, s, alpha=1 - momentum)
 
     def forward(self, batch: dict, teacher_temp: float) -> tuple[torch.Tensor, dict]:
-        """Args: batch: {"global": (B, T, 3, G, G), "local": (B, n, T, 3, L, L)}。Returns: (損失, 内訳)。"""
+        """1 step の損失。
+
+        Args:
+            batch: {"global": (B, T, 3, G, G), "local": (B, n, T, 3, L, L)}。
+            teacher_temp: 先生の softmax の温度。
+
+        Returns:
+            (損失, 内訳)。
+        """
         c = self.cfg
         b, t = batch["global"].shape[:2]
         frames = rearrange(batch["global"], "b t c h w -> (b t) c h w")
@@ -310,6 +361,13 @@ def train_dora(cfg: DoRAConfig, dataset: Dataset) -> Path:
     保存するもの: 1 エポックごとに、途中から再開する状態 `last.pt`(上書き。学生・先生・head・中心・optimizer・step)と、最新の
     `teacher_backbone.pt`・`student_backbone.pt`(上書き)。snapshot_every_epochs エポックごとに `teacher_backbone_ep{N}.pt` を残す。
     `last.pt` があれば、そこから続ける(途中で止めて、同じ設定で動かし直せば続きから学習する)。
+
+    Args:
+        cfg: DoRAConfig。
+        dataset: 動画の区間の切り抜き(VideoClipAugmentation の出力)を返す Dataset。
+
+    Returns:
+        最新の先生の backbone の重みのパス({out_dir}/{name}/teacher_backbone.pt)。
     """
     torch.manual_seed(cfg.seed); np.random.seed(cfg.seed); random.seed(cfg.seed)
     if cfg.max_vram_gb:

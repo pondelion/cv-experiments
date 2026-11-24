@@ -85,6 +85,7 @@ def koleo_loss(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
 
     Args:
         x: (B, C) の特徴(内側で L2 正規化する)。
+        eps: 距離に足す小さい値(log の 0 を防ぐ)。
 
     Returns:
         −mean(log(最も近い別の特徴までの距離))。
@@ -119,7 +120,14 @@ class GramLoss(nn.Module):
         self.remove_neg, self.remove_only_teacher_neg = remove_neg, remove_only_teacher_neg
 
     def _gram(self, f: torch.Tensor) -> torch.Tensor:
-        """(B, N, C) か (M, C) の特徴 → 似かたの表 (B, N, N) か (M, M)。"""
+        """特徴の似かたの表(内積。normalize なら cos)を作る。
+
+        Args:
+            f: (B, N, C) か (M, C) の特徴(img_level でなければ (B, N, C) を (B·N, C) にまとめる)。
+
+        Returns:
+            (B, N, N) か (M, M)。
+        """
         f = f.float()
         if self.normalize:
             f = F.normalize(f, dim=-1)
@@ -128,7 +136,15 @@ class GramLoss(nn.Module):
         return f @ f.transpose(-1, -2)
 
     def forward(self, student: torch.Tensor, teacher: torch.Tensor) -> torch.Tensor:
-        """Args: student・teacher: (B, N, C)(img_level)か (B, N, C)・(M, C)(まとめ全体)。Returns: 二乗誤差の平均。"""
+        """学生と先生の似かたの表の二乗誤差。
+
+        Args:
+            student: 学生のパッチの特徴 (B, N, C)(img_level)か (M, C)(まとめ全体)。
+            teacher: 先生のパッチの特徴(student と同じ形)。
+
+        Returns:
+            二乗誤差の平均。
+        """
         s, t = self._gram(student), self._gram(teacher)
         if self.remove_neg:
             s, t = s.clamp(min=0), t.clamp(min=0)

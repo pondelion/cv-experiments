@@ -34,7 +34,16 @@ PANEL = 240  # 見本の 1 枚の一辺の画素数
 
 
 def checkerboard(h: int, w: int, cell: int = 16) -> np.ndarray:
-    """灰色と濃い紫の市松模様(緑・白の背景とも、物体の色とも見分けやすい色)。"""
+    """灰色と濃い紫の市松模様(緑・白の背景とも、物体の色とも見分けやすい色)を作る。
+
+    Args:
+        h: 縦の画素数。
+        w: 横の画素数。
+        cell: 升目の一辺の画素数。
+
+    Returns:
+        (h, w, 3) の uint8。
+    """
     yy, xx = np.mgrid[:h, :w]
     board = ((yy // cell + xx // cell) % 2).astype(bool)
     out = np.empty((h, w, 3), np.uint8)
@@ -43,14 +52,31 @@ def checkerboard(h: int, w: int, cell: int = 16) -> np.ndarray:
 
 
 def cutout(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """マスクの中だけ元の画像を残し、外を市松模様にする。"""
+    """マスクの中だけ元の画像を残し、外を市松模様にする。
+
+    Args:
+        image: (H, W, 3) の uint8。
+        mask: (H, W) の bool。
+
+    Returns:
+        (H, W, 3) の uint8。
+    """
     out = checkerboard(*mask.shape)
     out[mask] = image[mask]
     return out
 
 
 def panel(image: np.ndarray, masks: dict[str, np.ndarray], title: str) -> np.ndarray:
-    """[元の画像 | 規則ごとに抜いた物体] を横に並べ、見出しを付ける。"""
+    """[元の画像 | 規則ごとに抜いた物体] を横に並べ、見出しを付ける。
+
+    Args:
+        image: 元の画像 (H, W, 3)。
+        masks: {規則の名前: マスク (H, W)}。
+        title: 見出し。
+
+    Returns:
+        並べた画像。
+    """
     tiles = [cv2.resize(image, (PANEL, PANEL), interpolation=cv2.INTER_AREA)]
     tiles += [cv2.resize(cutout(image, m), (PANEL, PANEL), interpolation=cv2.INTER_AREA) for m in masks.values()]
     labels = [title] + list(masks)
@@ -61,6 +87,7 @@ def panel(image: np.ndarray, masks: dict[str, np.ndarray], title: str) -> np.nda
 
 
 def main() -> None:
+    """規則 × プロンプトの組ごとに物体を抜き出し、並べた画像と面積の比べを保存する。"""
     pipe = load_pipeline()
     rng = random.Random(0)
     out_dir = common.RUNS_DIR / "q1b" / "no_shadow"

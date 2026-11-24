@@ -38,7 +38,16 @@ from segmentation.instance_segmentation.lib_common.models.video.minvis import ma
 
 
 def _mlp(d_in: int, d_hidden: int, d_out: int) -> nn.Sequential:
-    """3 層の MLP(層の間は ReLU。公式の MLP と同じ)。"""
+    """3 層の MLP(層の間は ReLU。公式の MLP と同じ)。
+
+    Args:
+        d_in: 入力の次元。
+        d_hidden: 中間の次元。
+        d_out: 出力の次元。
+
+    Returns:
+        nn.Sequential。
+    """
     return nn.Sequential(nn.Linear(d_in, d_hidden), nn.ReLU(inplace=True), nn.Linear(d_hidden, d_hidden), nn.ReLU(inplace=True),
                          nn.Linear(d_hidden, d_out))
 
@@ -126,7 +135,16 @@ class ReferringTrackerPlus(nn.Module):
         return preds, new_state, idx
 
     def predict(self, x: torch.Tensor, reference: torch.Tensor, mask_feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Args: x・reference (B, Q, D)、mask_feat (B, C, h, w)(射影の後)。Returns: (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。"""
+        """層の出力からクラス([参照; 出力] から)とマスクを出す。
+
+        Args:
+            x: 層の出力 (B, Q, D)。
+            reference: 参照の埋め込み (B, Q, D)。
+            mask_feat: マスクを作る特徴 (B, C, h, w)(射影の後)。
+
+        Returns:
+            (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。
+        """
         x = self.decoder_norm(x)
         logits = self.class_embed(torch.cat([reference, x], dim=-1))
         return logits, torch.einsum("bqc,bchw->bqhw", self.mask_embed(x), mask_feat)
@@ -137,6 +155,9 @@ def load_ctvis_segmenter(path: str) -> Mask2Former:
 
     Args:
         path: runs/{学習の名前}/best.pt(同じ場所の config.json から backbone・クエリの数・pixel decoder・学習のセットを読む)。
+
+    Returns:
+        重みを読んだ Mask2Former(reid の head つき)。
     """
     from segmentation.instance_segmentation.lib_common.video_data import load_video_set
     cfg = json.loads((Path(path).parent / "config.json").read_text())

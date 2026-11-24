@@ -42,7 +42,8 @@ def plot_eval_curves(series: dict[str, list[tuple[float, float]]], out_path: Pat
         series: {学習の名前: [(エポック, 値), ...]}。値は % のまま渡す。
         out_path: 保存先の PNG のパス。
         title: 図の題。
-        xlabel, ylabel: 軸の名前。
+        xlabel: 横軸の名前。
+        ylabel: 縦軸の名前。
         legend_outside: 凡例を図の右の外に出す(系列が多いとき)。
     """
     fig, ax = plt.subplots(figsize=(9, 4.5) if legend_outside else (6, 3.6))

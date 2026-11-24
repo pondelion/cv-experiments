@@ -1,0 +1,54 @@
+{
+ "bytetrack_th0.2": {
+  "config": {
+   "track_thresh": 0.2,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 48.28119883402247,
+    "DetA": 38.46074982467682,
+    "AssA": 61.90679599418246,
+    "LocA": 80.39743552161114,
+    "MOTA": 36.42073373480622,
+    "IDSW": 91.0,
+    "IDF1": 55.34042071929428
+   }
+  }
+ },
+ "bytetrack_th0.6": {
+  "config": {
+   "track_thresh": 0.6,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 34.96961964336929,
+    "DetA": 18.80384053247623,
+    "AssA": 65.3918245393257,
+    "LocA": 83.60326385910145,
+    "MOTA": 20.19063804632948,
+    "IDSW": 22.0,
+    "IDF1": 34.1544488632991
+   }
+  }
+ }
+}

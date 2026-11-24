@@ -67,15 +67,27 @@ class CAVISSeg(nn.Module):
         self.segmenter = segmenter
 
     def forward(self, clips: torch.Tensor) -> tuple[list[dict], None]:
-        """学習: 区間の全フレームを画像としてまとめて Mask2Former にかける。Args: clips (B, T, 3, S, S)。
+        """学習: 区間の全フレームを画像としてまとめて Mask2Former にかける。
 
-        Returns: (層ごとの予測(画像は (b t) の順に B·T 枚。最後の要素に "reid"・"mask_feat"), None)。
+        Args:
+            clips: (B, T, 3, S, S)。
+
+        Returns:
+            (層ごとの予測(画像は (b t) の順に B·T 枚。最後の要素に "reid"・"mask_feat"), None)。
         """
         return self.segmenter(rearrange(clips, "b t c h w -> (b t) c h w")), None
 
     @torch.no_grad()
     def predict_video(self, frames: torch.Tensor, chunk: int = 8) -> tuple[torch.Tensor, torch.Tensor]:
-        """隣のフレームのクエリを [クエリの埋め込み; reid の埋め込み] で照合する(公式の CAVIS_segmenter.post_processing)。"""
+        """隣のフレームのクエリを [クエリの埋め込み; reid の埋め込み] で照合する(公式の CAVIS_segmenter.post_processing)。
+
+        Args:
+            frames: (T, 3, S, S)。
+            chunk: segmenter でまとめて処理するフレームの数。
+
+        Returns:
+            (フレームごとのクラスの値 (T, Q, K+1), マスクの値 (Q, T, h, w))(クエリの枠 = ID)。
+        """
         return MinVIS(self.segmenter, chunk, embed_key="embeds_ctx").predict_video(frames)
 
 
@@ -137,7 +149,15 @@ class CAVISTracker(nn.Module):
         return preds, state, idx
 
     def predict(self, x: torch.Tensor, mask_feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Args: x (B, Q, C)、mask_feat (B, C, h, w)。Returns: (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。"""
+        """層の出力からクラスとマスクを出す。
+
+        Args:
+            x: 層の出力 (B, Q, C)。
+            mask_feat: マスクを作る特徴 (B, C, h, w)。
+
+        Returns:
+            (クラスの値 (B, Q, K+1), マスクの値 (B, Q, h, w))。
+        """
         x = self.decoder_norm(x)
         return self.class_embed(x), torch.einsum("bqc,bchw->bqhw", self.mask_embed(x), mask_feat)
 
@@ -147,6 +167,9 @@ def load_cavis_segmenter(path: str) -> Mask2Former:
 
     Args:
         path: runs/{学習の名前}/best.pt(同じ場所の config.json から backbone・クエリの数・pixel decoder・学習のセットを読む)。
+
+    Returns:
+        重みを読んだ Mask2Former(reid の head と文脈の特徴の head つき)。
     """
     from segmentation.instance_segmentation.lib_common.video_data import load_video_set
     cfg = json.loads((Path(path).parent / "config.json").read_text())
