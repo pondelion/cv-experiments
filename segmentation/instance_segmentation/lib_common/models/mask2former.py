@@ -505,11 +505,13 @@ class Mask2Former(nn.Module):
         attn = repeat(attn, "b q n -> (b h) q n", h=self.nhead).detach()
         return logits, masks, attn
 
-    def forward(self, images: torch.Tensor) -> list[dict]:
+    def forward(self, images: torch.Tensor, init_q: torch.Tensor | None = None) -> list[dict]:
         """画像から、全層の予測を出す。
 
         Args:
             images: 入力の画像 (B(画像の数), 3(RGB), S(一辺の画素数), S)。
+            init_q: decoder に入れる最初のクエリの内容 (B, Q, C)。None なら学習するクエリ(query_feat)。動画の版
+                (models/video/m2f_videomt.py)が、前のフレームのクエリから作ったものを渡す。
 
         Returns:
             予測の並び(最初のクエリ + 各層。最後の要素が最終の予測)。各要素は
@@ -524,7 +526,7 @@ class Mask2Former(nn.Module):
             poss.append(rearrange(sine_pos(f), "b c h w -> b (h w) c"))  # (B, C, H, W) -> (B, N, C)
             mems.append(rearrange(f, "b c h w -> b (h w) c") + self.level_embed.weight[lvl])  # (B, C, H, W) -> (B, N, C)
         b = images.shape[0]
-        q = repeat(self.query_feat.weight, "q c -> b q c", b=b)  # (Q, C) -> (B, Q, C)
+        q = repeat(self.query_feat.weight, "q c -> b q c", b=b) if init_q is None else init_q  # (Q, C) -> (B, Q, C)
         qpos = repeat(self.query_pos.weight, "q c -> b q c", b=b)  # (Q, C) -> (B, Q, C)
         logits, masks, attn = self._predict(q, mask_feat, sizes[0])
         outs = [{"logits": logits, "masks": masks}]

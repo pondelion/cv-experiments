@@ -4,7 +4,8 @@
 `consensus_associated.py`(spatial_alignment)・`segment_merging.py`・`object_manager.py`・`object_info.py`・`image_feature_store.py`・
 `evaluation/eval_with_detections.py` の semionline の手順・`result_utils.py`)。コードは写さず、規則を読み取って書いた。
 設定は公式の VIPSeg の評価と同じ(detection_every 5、num_voting_frames 3、max_missed_detection_count 5、mem_every 5、top_k 30、
-長期記憶 10・5・128・10,000)。
+長期記憶 10・5・128・10,000)。ただし画像のモデルの検出の確信度の閾値(公式は 0.8)は使わず、確信度の上位 100 個の検出を使う
+(AP の評価の前に確信度で予測を切らない。ほかの方式と同じ。DET_TOP_K)。
 
 MOT(動画全体での物体の ID の管理・識別)の形: **推論の規則(伝搬と検出の統合)+ 学習した伝搬の記憶**。1 つの ID = 1 つの物体の伝搬。
     - 5 フレームごとに、その先の 3 フレームの検出を最初のフレームへ伝搬で運び、IoU > 0.5 で互いに支え合う検出の組を、整数線形計画
@@ -35,7 +36,10 @@ from segmentation.instance_segmentation.lib_common.models.video.deva.memory impo
 from segmentation.instance_segmentation.lib_common.models.video.deva.network import DEVA, do_softmax, get_similarity
 
 DETECTION_EVERY, NUM_VOTING_FRAMES, MAX_MISSED, MEM_EVERY = 5, 3, 5, 5
-OBJECT_MASK_THRESHOLD, OVERLAP_THRESHOLD = 0.8, 0.8  # Mask2Former の VIPSeg の推論の設定(パノプティックの後処理)
+# OVERLAP_THRESHOLD: Mask2Former の VIPSeg の推論の設定(パノプティックの後処理。ほかの物体に塗りつぶされて元のマスクの 0.8 未満しか
+# 残らない検出は使わない)。公式の確信度の閾値 OBJECT_MASK_THRESHOLD(0.8)は、AP の評価の前に確信度で予測を切らないため使わない。
+# 代わりに、ほかの方式の上位 100 個と同じく、確信度の上位 DET_TOP_K 個の検出を使う
+OVERLAP_THRESHOLD, DET_TOP_K = 0.8, 100
 
 
 class ObjectInfo:
@@ -570,13 +574,11 @@ def detections_to_panoptic(out: dict, i: int, size: int) -> tuple[torch.Tensor, 
     Returns:
         (ID の地図 (S, S)(0 は背景), 物体の情報 [ObjectInfo(id, category_id(0 始まり), isthing, score)])。
     """
-    probs = out["probs"][i]  # (Q, K)
+    probs = out["probs"][i]  # (Q, K)(物体なしを除いたクラスの確率)
     scores, labels = probs.max(-1)
-    if out["activation"] == "softmax":  # 物体なしが最大のクエリを除く(公式: labels.ne(num_classes))
-        full = out["logits"][i].float().softmax(-1)
-        keep = (full.argmax(-1) != full.shape[-1] - 1) & (scores > OBJECT_MASK_THRESHOLD)
-    else:
-        keep = scores > OBJECT_MASK_THRESHOLD
+    # 確信度の上位 DET_TOP_K 個のクエリ(確信度の閾値・「物体なしが最大のクエリを除く」規則は、確信度で予測を切ることになるので使わない)
+    keep = torch.zeros_like(scores, dtype=torch.bool)
+    keep[scores.topk(min(DET_TOP_K, len(scores))).indices] = True
     pan = torch.zeros((size, size), dtype=torch.long, device=probs.device)
     infos = []
     if keep.sum() == 0:

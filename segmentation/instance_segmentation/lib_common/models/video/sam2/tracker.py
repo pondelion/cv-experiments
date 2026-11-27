@@ -9,17 +9,21 @@ _tracker_add_new_objects・build_outputs)、`sam3_video_inference.py`(propagate_
 
 MOT(動画全体での物体の ID の管理・識別)の形: **推論の規則(検出と追跡の照合)+ 物体ごとの記憶の伝搬**。1 本の追跡 = 1 つの ID。
 フレームごとに:
-    1. 画像のモデルで検出(点数 > 0.5、マスクの IoU 0.1 の NMS)
-    2. 追跡している物体を SAM 2 で今のフレームに伝搬(記憶はまだ作らない)。マスクの小さな穴を埋め、小さな点を消す(面積 16)
-    3. 照合(マスクの IoU): 追跡は IoU ≥ 0.5 の検出があれば「照合あり」。検出は、点数 ≥ 0.7 で、どの追跡とも IoU < 0.1 なら新しい物体
+    1. 画像のモデルで検出(フレームごとの点数の上位 TOP_K 個、マスクの IoU 0.1 の NMS。公式の点数 > 0.5 の閾値は使わない)
+    2. 追跡している物体を SAM 2 で今のフレームに伝搬(記憶はまだ作らない。全部の物体をまとめて計算する)。マスクの小さな穴を埋め、
+       小さな点を消す(面積 16)
+    3. 照合(マスクの IoU): 追跡は IoU ≥ 0.5 の検出があれば「照合あり」。検出は、どの追跡とも IoU < 0.1 なら新しい物体(公式の
+       点数 ≥ 0.7 の閾値は使わない)
     4. 生存のカウンタ(初期 30): 照合ありで +1(上限 30)、照合なし(マスクが空でないのに検出がない)で −1(下限 −1)。
        ホットスタート: 初めて写ってから 15 フレームの間に、照合なしが 8 回、または同じ検出に先に出た追跡と一緒に照合されたことが 8 回あれば、
        その ID を除く(出力からも消す)
     5. 16 フレームごとに、点数 0.8 以上の検出と IoU 0.8 以上で一意に組になった追跡(物体らしさの値 > 0.8)は、検出のマスクを与え直す
     6. 最近隠れた方の物体のマスクを消す(IoU ≥ 0.7 の 2 つの追跡のうち、隠れたのが最近の方)
     7. 記憶を作る(画素ごとに最も値の大きい物体だけを残したとき面積が 0.3 未満に縮む物体は消してから。物体らしさは面積の有無で ±10)
-    8. 新しい物体を、検出のマスクを与えた新しい追跡として足す(新しい ID。点数はその検出の点数、クラスはその検出のクラス)
-    出力: 除いた ID を隠し、空のマスクを除き、重なる画素は追跡の点数の高い物体に割り当てる
+    8. 新しい物体を、検出のマスクを与えた新しい追跡として足す(新しい ID。点数はその検出の点数、クラスはその検出のクラス)。
+       同時に追跡する物体の数の上限 MAX_TRACKS(100)まで、点数の高い順(確信度の閾値ではない)
+    出力: 除いた ID を隠し、空のマスクを除き、重なる画素は追跡の点数の高い物体に割り当てる。動画ごとに点数の上位 100 個
+    (ほかの方式の評価と同じ。AP の評価の前に予測を確信度の閾値で切らない)
 クラス: SAM 3 は 1 つの概念(文章)ごとに上を行う。ここでは画像のモデルの決まったクラスごとに同じことを行う(クラスをまたいだ照合はしない)。
 生存のカウンタは、公式の既定(suppress_unmatched_only_within_hotstart=True)では ID を除く・隠すことに使われない(数えるだけ)。
 ホットスタートの 15 フレームを過ぎた追跡は除かれず、隠れている間は物体らしさの値が負になって空のマスクを出し(出力では空として除く)、
@@ -40,9 +44,12 @@ import torch.nn.functional as F
 from segmentation.instance_segmentation.lib_common.models.video.image_adapter import ImageSegmenter
 from segmentation.instance_segmentation.lib_common.models.video.sam2.model import SAM2
 
-# 公式の動画のモデルの既定(model_builder.py の apply_temporal_disambiguation=True)
-SCORE_THRESHOLD_DETECTION, DET_NMS_THRESH = 0.5, 0.1
-ASSOC_IOU_THRESH, TRK_ASSOC_IOU_THRESH, NEW_DET_THRESH = 0.1, 0.5, 0.7
+# 公式の動画のモデルの既定(model_builder.py の apply_temporal_disambiguation=True)。ただし、AP の評価の前に予測を確信度の閾値で
+# 切らないため、検出の確信度の閾値(公式 0.5)と新しい物体の確信度の閾値(公式 0.7)は使わない(私の判断。ほかの方式の評価と同じ条件)
+NO_SCORE_THRESHOLD, DET_NMS_THRESH = float("-inf"), 0.1
+ASSOC_IOU_THRESH, TRK_ASSOC_IOU_THRESH = 0.1, 0.5
+MAX_TRACKS = 100  # 同時に追跡する物体の数の上限(出力の上位 100 個と同じ数。確信度の閾値ではない)
+TOP_K_OUT = 100  # 動画ごとに出す予測の数(ほかの方式の評価と同じ)
 HOTSTART_DELAY, HOTSTART_UNMATCH_THRESH, HOTSTART_DUP_THRESH = 15, 8, 8
 INIT_TRK_KEEP_ALIVE, MAX_TRK_KEEP_ALIVE, MIN_TRK_KEEP_ALIVE = 30, 30, -1
 SUPPRESS_OVERLAP_OCCLUSION_THRESH, FILL_HOLE_AREA, RECONDITION_EVERY = 0.7, 16, 16
@@ -125,11 +132,53 @@ def fill_holes_and_sprinkles(mask: torch.Tensor, max_area: int = FILL_HOLE_AREA)
         areas = stats[:, cv2.CC_STAT_AREA]
         return m & (areas[labels] <= thresh)
 
+    # 全部の物体のマスクを 1 回で CPU に移して調べ、穴・点の画素を 1 回で GPU に戻す(物体ごとに転送しない。結果は同じ:
+    # 穴を 0.1 にした後の前景(値 > 0)で点を調べる)
+    bg_all = (mask <= 0).cpu().numpy()  # (M, h, w)
+    holes = np.zeros_like(bg_all)
+    sprinkles = np.zeros_like(bg_all)
     for i in range(mask.shape[0]):
-        bg = (out[i] <= 0).cpu().numpy()
-        out[i][torch.as_tensor(small(bg, max_area), device=mask.device)] = 0.1
-        fg = (out[i] > 0).cpu().numpy()
-        out[i][torch.as_tensor(small(fg, min(int(fg.sum()) // 2, max_area)), device=mask.device)] = -0.1
+        holes[i] = small(bg_all[i], max_area)
+        fg = ~bg_all[i] | holes[i]
+        sprinkles[i] = small(fg, min(int(fg.sum()) // 2, max_area))
+    out = torch.where(torch.as_tensor(holes, device=mask.device), torch.full_like(out, 0.1), out)
+    return torch.where(torch.as_tensor(sprinkles, device=mask.device), torch.full_like(out, -0.1), out)
+
+
+_KEEP = ("maskmem_features", "maskmem_pos_enc", "obj_ptr", "_mem_tok", "_mem_pos_tok")  # 記憶の取り出し(_gather_memory)が使う値
+
+
+def _slim(out_dict: dict, t: int, window: int) -> None:
+    """1 本の追跡の過去の出力から、記憶の取り出しに使わない値と、使わない古いフレームを消す(結果は変わらない)。
+
+    記憶の取り出しは、条件のフレーム(全部)と、直近の条件でないフレーム(記憶は 6 フレーム、物体のポインタは window − 1 フレーム)
+    だけを使う。記憶を作った後の出力の、マスク・損失のための値も使わない。
+
+    Args:
+        out_dict: {"cond": {t: 出力}, "non_cond": {t: 出力}}(その場で書き換える)。
+        t: 今のフレームの番号(記憶を作り終えたフレーム)。
+        window: 物体のポインタを使う過去のフレームの数(SAM2.max_obj_ptrs_in_encoder)。
+    """
+    for store in (out_dict["cond"], out_dict["non_cond"]):
+        for s in list(store):
+            o = store[s]
+            if "maskmem_features" in o:  # 記憶を作り終えた出力は、記憶の取り出しに使う値だけ残す
+                for k in [k for k in o if k not in _KEEP]:
+                    del o[k]
+    for s in [s for s in out_dict["non_cond"] if s <= t - window]:
+        del out_dict["non_cond"][s]
+
+
+def _split_out(cur: dict, j: int, n: int) -> dict:
+    """物体をまとめて計算した track_step の出力から、j 番目の物体の分(batch 1)を取り出す。"""
+    out = {}
+    for k, v in cur.items():
+        if torch.is_tensor(v):
+            out[k] = v[j: j + 1] if v.shape[0] == n else v
+        elif isinstance(v, list):
+            out[k] = [x[j: j + 1] if torch.is_tensor(x) and x.shape[0] == n else x for x in v]
+        else:
+            out[k] = v
     return out
 
 
@@ -179,6 +228,8 @@ class SAM3StyleVIS(torch.nn.Module):
             to_predictions で行う(元の大きさで)。
         """
         t_all, s = len(frames), frames.shape[-1]
+        # 物体のポインタの位置の埋め込みの使い回し(SAM2._gather_memory)は、動画ごとに作り直す(学習で重みが変わった後に古い値を使わない)
+        self.sam2.__dict__["_tp_cache"] = {}
         tracks: list[_Track] = []
         next_id = 0
         results = {}  # oid -> {t: マスクの値 (h, w)}
@@ -197,11 +248,13 @@ class SAM3StyleVIS(torch.nn.Module):
                 # 2. 伝搬(記憶はまだ作らない)
                 alive = [tr for tr in tracks if not tr.removed]
                 trk_low, trk_obj = [], []
-                for tr in alive:
-                    cur = self.sam2.track_step(t, False, feats, ps, None, None, tr.out_dict, t_all, run_mem=False)
+                # 追跡している全部の物体をまとめて伝搬する(公式の動画の推論と同じく物体を batch の向きに並べる。物体ごとの記憶は独立)
+                curs = self.sam2.propagate_batched(t, feats, ps, [tr.out_dict for tr in alive], t_all) if alive else []
+                for tr, cur in zip(alive, curs):
                     tr.out_dict["non_cond"][t] = cur
                     trk_low.append(cur["pred_masks"][0, 0].float())
-                    trk_obj.append(float(cur["object_score_logits"][0, 0]))
+                if curs:
+                    trk_obj = torch.cat([cur["object_score_logits"] for cur in curs]).flatten().tolist()
                 trk_low = (fill_holes_and_sprinkles(torch.stack(trk_low)) if trk_low
                            else torch.zeros(0, *det["masks"].shape[-2:], device=frames.device))
                 low_h, low_w = trk_low.shape[-2:]
@@ -212,7 +265,7 @@ class SAM3StyleVIS(torch.nn.Module):
                     d_masks, d_scores = det["masks"][in_c], det["scores"][in_c]
                     if d_masks.shape[-2:] != (low_h, low_w) and len(d_masks):
                         d_masks = F.interpolate(d_masks[:, None], size=(low_h, low_w), mode="bilinear", align_corners=False)[:, 0]
-                    keep = nms_masks(d_scores, d_masks, SCORE_THRESHOLD_DETECTION, DET_NMS_THRESH)
+                    keep = nms_masks(d_scores, d_masks, NO_SCORE_THRESHOLD, DET_NMS_THRESH)  # 確信度で切らない(NMS だけ)
                     d_masks, d_scores = d_masks[keep], d_scores[keep]
                     ti = [k for k, tr in enumerate(alive) if tr.label == c]
                     t_masks = trk_low[ti]
@@ -255,12 +308,9 @@ class SAM3StyleVIS(torch.nn.Module):
                                 tr.out_dict["non_cond"].pop(t, None)
                                 tr.out_dict["cond"][t] = self.sam2.track_step(t, True, feats, ps, None, m, tr.out_dict, t_all)
                                 tr.reconditioned_mask = d_masks[d].clone()
-                    # 8.(準備)新しい物体
+                    # 8.(準備)新しい物体の候補(クラス, 確信度, 検出のマスク)。追跡の数の上限は、全部のクラスを集めてから確信度の順に決める
                     for d in new_det:
-                        tr = _Track(next_id, c, float(d_scores[d]), t)
-                        next_id += 1
-                        tr.new_mask = fill_holes_and_sprinkles(d_masks[d][None])[0]
-                        new_tracks.append(tr)
+                        new_tracks.append((c, float(d_scores[d]), d_masks[d]))
                     # 6. 最近隠れた方の物体のマスクを消す(このクラスの中)
                     self._suppress_recent_occlusion(trk_low, [alive[k] for k in ti], ti, t)
                 # 7. 記憶を作る(クラスごとに面積の縮みの抑制をしてから)
@@ -270,10 +320,12 @@ class SAM3StyleVIS(torch.nn.Module):
                         ks = [k for k, tr in enumerate(alive) if tr.label == c]
                         high[ks] = self._suppress_shrinkage(high[ks])
                     obj = torch.where((high > 0).flatten(1).any(-1, keepdim=True), 10.0, -10.0)  # (M, 1)
+                    # 全部の物体の記憶をまとめて 1 回で作る(物体ごとに独立な計算)
+                    mem, mem_pos = self.sam2._encode_memory(feats[-1].expand(len(alive), -1, -1, -1), high, obj, False)
                     for k, tr in enumerate(alive):
                         store = tr.out_dict["cond"] if t in tr.out_dict["cond"] else tr.out_dict["non_cond"]
-                        store[t]["maskmem_features"], store[t]["maskmem_pos_enc"] = self.sam2._encode_memory(
-                            feats[-1], high[k: k + 1], obj[k: k + 1], False)
+                        store[t]["maskmem_features"] = mem[k: k + 1]
+                        store[t]["maskmem_pos_enc"] = mem_pos[k: k + 1] if mem_pos.shape[0] == len(alive) else mem_pos
                 # 出力(既存の追跡 → 再条件付けは検出のマスク)
                 for k, tr in enumerate(alive):
                     if tr.removed:
@@ -282,13 +334,31 @@ class SAM3StyleVIS(torch.nn.Module):
                     results.setdefault(tr.oid, {})[t] = (m if m is not None else trk_low[k]).clone()
                     tr.reconditioned_mask = None
                     frame_scores[t][tr.oid] = float(torch.sigmoid(torch.tensor(trk_obj[k])))
-                # 8. 新しい物体を足す(検出のマスクを条件のフレームとして与え、記憶を作る)
-                for tr in new_tracks:
-                    m = F.interpolate(tr.new_mask[None, None], size=(s, s), mode="bilinear", align_corners=False) > 0
-                    tr.out_dict["cond"][t] = self.sam2.track_step(t, True, feats, ps, None, m, tr.out_dict, t_all)
-                    results.setdefault(tr.oid, {})[t] = tr.new_mask
-                    frame_scores[t][tr.oid] = tr.score  # 新しい物体の追跡の点数は検出の点数(公式と同じ)
-                    tracks.append(tr)
+                # 8. 新しい物体を足す(検出のマスクを条件のフレームとして与え、記憶を作る)。同時に追跡する物体の数の上限 MAX_TRACKS まで、
+                # 確信度の高い順(確信度の閾値は使わない)。全部の新しい物体をまとめて 1 回で始める(記憶を使わない計算なので独立)
+                room = MAX_TRACKS - sum(not tr.removed for tr in tracks)
+                new_tracks = sorted(new_tracks, key=lambda x: -x[1])[:max(room, 0)]
+                if new_tracks:
+                    born = []
+                    for c, sc, dm in new_tracks:
+                        tr = _Track(next_id, c, sc, t)
+                        next_id += 1
+                        tr.new_mask = fill_holes_and_sprinkles(dm[None])[0]
+                        born.append(tr)
+                    m = F.interpolate(torch.stack([tr.new_mask for tr in born])[:, None], size=(s, s), mode="bilinear",
+                                      align_corners=False) > 0  # (N, 1, S, S)
+                    n = len(born)
+                    cur = self.sam2.track_step(t, True, [f.expand(n, -1, -1, -1) for f in feats],
+                                               [p.expand(n, -1, -1, -1) for p in ps], None, m, {"cond": {}, "non_cond": {}}, t_all)
+                    for j, tr in enumerate(born):
+                        tr.out_dict["cond"][t] = _split_out(cur, j, n)
+                        results.setdefault(tr.oid, {})[t] = tr.new_mask
+                        frame_scores[t][tr.oid] = tr.score  # 新しい物体の追跡の点数は検出の点数(公式と同じ)
+                        tracks.append(tr)
+                # とっておく過去の出力を、記憶の取り出しに使う値だけにする(GPU のメモリを物体の数 × フレームの数で増やさない)
+                for tr in tracks:
+                    if not tr.removed:
+                        _slim(tr.out_dict, t, self.sam2.max_obj_ptrs_in_encoder)
         self._frame_scores = frame_scores
         return [{"oid": tr.oid, "label": tr.label, "score": tr.score, "masks": results.get(tr.oid, {})}
                 for tr in tracks if not tr.removed]
@@ -306,7 +376,7 @@ class SAM3StyleVIS(torch.nn.Module):
             (新しい物体にする検出の番号, 照合のない(空でない)追跡の番号, {検出: [照合した追跡]}, {追跡: 再条件付けの検出})。
         """
         n, m = len(d_masks), len(t_masks)
-        if m == 0:
+        if m == 0:  # 追跡がなければ全部の検出が新しい物体(確信度で切らない)
             return list(range(n)), [], {}, {}
         t_bin = t_masks > 0
         nonempty = t_bin.flatten(1).any(-1)
@@ -316,7 +386,7 @@ class SAM3StyleVIS(torch.nn.Module):
         iou = mask_iou(d_bin, t_bin)  # (N, M)
         trk_matched = (iou >= TRK_ASSOC_IOU_THRESH).any(0)
         unmatched = torch.nonzero(nonempty & ~trk_matched).squeeze(-1).tolist()
-        is_new = (d_scores >= NEW_DET_THRESH) & ~(iou >= ASSOC_IOU_THRESH).any(1)
+        is_new = ~(iou >= ASSOC_IOU_THRESH).any(1)  # どの追跡とも重ならない検出は新しい物体(確信度で切らない)
         many_trk = (iou >= IOU_THRESH_RECONDITION).sum(1) > 1  # 1 つの検出が複数の追跡と高い IoU(曖昧)
         many_det = (iou >= IOU_THRESH_RECONDITION).sum(0) > 1
         iou_u = torch.where(many_det[None, :], torch.zeros_like(iou), iou)
@@ -397,6 +467,8 @@ class SAM3StyleVIS(torch.nn.Module):
             評価の予測 [{"video_id", "category_id", "score", "segmentations", "query"}]。
         """
         from pycocotools import mask as mask_util
+        # 動画ごとに点数の上位 TOP_K_OUT 個を出す(重なりの処理も、出す予測どうしで行う)
+        tracks = sorted(tracks, key=lambda tr: -tr["score"])[:TOP_K_OUT]
         segs = {tr["oid"]: [None] * t_all for tr in tracks}
         for t in range(t_all):
             for c in sorted({tr["label"] for tr in tracks}):

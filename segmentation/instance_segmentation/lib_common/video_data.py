@@ -142,6 +142,28 @@ def video_train_transforms(size: int = 512, scale_range: tuple[float, float] = (
     ])
 
 
+def video_train_transforms_videomt_vipseg(size: int = 512) -> A.Compose:
+    """公式の VidEoMT の VIPSeg の学習の変換を、入力 S に縮めたもの(切り抜きなし)。
+
+    公式(configs/VIPSeg/Base_R50_720p.yaml、dataset_mapper_vps.py): 短辺を (480, 512, …, 800) から 1 つ選んで拡大縮小し
+    (長辺は 1333 まで)、左右の反転をかける。切り抜きはしない。評価は短辺 720 なので、学習の大きさは評価の 480/720〜800/720 倍。
+    ここでは評価(video_eval_transforms: 長辺を S)と同じ比で、長辺を S × (480, 512, …, 800) / 720 から選び、S を超える分は S にする
+    (入力の大きさを S のままにするため。0.67〜1.0 倍)。右と下を埋めて S × S にする。
+
+    Args:
+        size: 入力の一辺 S。
+
+    Returns:
+        A.Compose(video_train_transforms と同じ呼び方)。
+    """
+    sizes = sorted({min(size, round(size * s / 720)) for s in range(480, 801, 32)})
+    return A.Compose([
+        A.LongestMaxSize(max_size=sizes, interpolation=cv2.INTER_LINEAR, mask_interpolation=cv2.INTER_NEAREST),
+        A.PadIfNeeded(min_height=size, min_width=size, position="top_left", border_mode=cv2.BORDER_CONSTANT, fill=0, fill_mask=0),
+        A.HorizontalFlip(p=0.5),
+    ])
+
+
 def video_eval_transforms(size: int = 512) -> A.Compose:
     """評価の変換(長い辺を S にそろえて、右と下を埋める。画像の段階の eval_transforms と同じ)。
 
@@ -246,11 +268,13 @@ class VideoClipDataset(Dataset):
         seed: 乱数の種(要素ごとに seed と番号から作るので、worker の数によらず同じ区間になる)。
         frame_skip_p: 0 より大きいと、区間を sample_clip_skip(フレームの間引きのデータ拡張つき)で選ぶ。その skip_p。
         frame_skip_random_p: sample_clip_skip の random_p。
+        train_aug: 学習の変換("lsj": video_train_transforms / "videomt_vipseg": video_train_transforms_videomt_vipseg)。
     """
 
     def __init__(self, set_name: str, clip_len: int = 5, frame_range: int = 2, size: int = 512, seed: int = 0,
-                 frame_skip_p: float = 0.0, frame_skip_random_p: float = 0.0):
+                 frame_skip_p: float = 0.0, frame_skip_random_p: float = 0.0, train_aug: str = "lsj"):
         self.frame_skip_p, self.frame_skip_random_p = frame_skip_p, frame_skip_random_p
+        self.train_aug = train_aug
         d = load_video_set(set_name)
         self.videos = d["videos"]
         self.cat_ids = [c["id"] for c in d["categories"]]
@@ -259,7 +283,7 @@ class VideoClipDataset(Dataset):
         for a in d["annotations"]:
             self.anns[a["video_id"]].append(a)
         self.clip_len, self.frame_range, self.size, self.seed = clip_len, frame_range, size, seed
-        self.transform = video_train_transforms(size)
+        self.transform = {"lsj": video_train_transforms, "videomt_vipseg": video_train_transforms_videomt_vipseg}[train_aug](size)
         self.epoch = 0  # set_epoch で変えると、同じ動画から別の区間を選ぶ
 
     def set_epoch(self, epoch: int) -> None:

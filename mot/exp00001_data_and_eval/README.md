@@ -47,17 +47,17 @@ SportsMOT を並べる。マスクの追跡(MOTS)は KITTI MOTS・MOTS20・BDD10
 2. 対応付けの手法の差が出やすいか(対応付けを比べるのが mot/ の中心)
 3. インスタンスセグメンテーションのモデル(マスク・複数のクラス)を使う意味が出るか、動画のモデル(exp00502)と並べられるか
 
-| データセット | 使う | 理由 | サイズ |
-|---|---|---|---|
-| MOT17 | 使う | 観点 1: 最もよく使われ、公開の手法の値が一番多い。自作の追跡の手法の再現の確かめに使う。小さい | 5.86 GB |
-| DanceTrack(train・val だけ) | 使う | 観点 2: 見た目で区別しにくく動きも大きいので、対応付けの差が一番出る。公開の val で評価できる。test は正解がないので落とさない | 11.1 GB |
-| BDD100K MOTS | 使いたかったが入手できない(下の「入手できなかったデータ」) | 観点 3: マスクの追跡で、クラスが 8 つあり(segmentation の 8 クラスと人・車・自転車などが重なる)、公開の val で評価できる | 5.9 GB |
-| VIPSeg | 使う(入手済み) | 観点 3: exp00502 の動画のモデルと、同じセット・同じ評価で並べる | — |
-| MOTS20 | 必要になったら | MOT17 の一部の動画のマスクで、歩行者のマスクの追跡を MOT17 と同じ動画で見られる。小さい(0.69 GB)が、動画が 4 本だけ | 0.69 GB |
-| KITTI MOTS | 使う(BDD100K MOTS の代わり) | 観点 3: 車載のカメラのマスクの追跡(車・歩行者の 2 クラス)。公式の順位も HOTA。test の正解は非公開なので、training を分けて使う | 15.8 GB |
-| MOT20・SportsMOT | 使わない | MOT20 は MOT17 と同じ歩行者で密集だけが違う。SportsMOT はスポーツに限った場面で大きい(36.5 GB)。対応付けの比較は DanceTrack で足りる | — |
-| TAO | 使わない | 大きすぎる(約 114 GiB)。オープンボキャブラリーの追跡をするときに考える | — |
-| CrowdHuman | 後で決める | 人の検出器の学習に足す慣例があるが、追跡の比較では検出を固定するので、まずは不要。人の検出が弱いとわかったら考える | 未確認 |
+| データセット | 対象のクラス | 使う | 理由 | サイズ |
+|---|---|---|---|---|
+| MOT17 | pedestrian(歩行者。学習のデータ(COCO・VIPSeg の 8 クラス)に pedestrian はないので、person で代用) | 使う | 観点 1: 最もよく使われ、公開の手法の値が一番多い。自作の追跡の手法の再現の確かめに使う。小さい | 5.86 GB |
+| DanceTrack(train・val だけ) | pedestrian(踊っている人。person で代用) | 使う | 観点 2: 見た目で区別しにくく動きも大きいので、対応付けの差が一番出る。公開の val で評価できる。test は正解がないので落とさない | 11.1 GB |
+| BDD100K MOTS | pedestrian・rider・car・truck・bus・train・motorcycle・bicycle | 使いたかったが入手できない(下の「入手できなかったデータ」) | 観点 3: マスクの追跡で、クラスが 8 つあり(segmentation の 8 クラスと人・車・自転車などが重なる)、公開の val で評価できる | 5.9 GB |
+| VIPSeg | person・bicycle・car・cat・dog・bottle_or_cup・chair_or_seat・screen_or_television(VIPSeg のクラスの名前。exp00502 と同じ 8 クラス。COCO の person・bicycle・car・cat・dog・bottle・chair・tv に当たる) | 使う(入手済み) | 観点 3: exp00502 の動画のモデルと、同じセット・同じ評価で並べる | — |
+| MOTS20 | pedestrian(歩行者。person で代用) | 必要になったら | MOT17 の一部の動画のマスクで、歩行者のマスクの追跡を MOT17 と同じ動画で見られる。小さい(0.69 GB)が、動画が 4 本だけ | 0.69 GB |
+| KITTI MOTS | car・pedestrian(car は学習のデータの car、pedestrian は person で代用) | 使う(BDD100K MOTS の代わり) | 観点 3: 車載のカメラのマスクの追跡(車・歩行者の 2 クラス)。公式の順位も HOTA。test の正解は非公開なので、training を分けて使う | 15.8 GB |
+| MOT20・SportsMOT | MOT20: pedestrian(歩行者)、SportsMOT: player(選手)(使うなら、どちらも person で代用) | 使わない | MOT20 は MOT17 と同じ歩行者で密集だけが違う。SportsMOT はスポーツに限った場面で大きい(36.5 GB)。対応付けの比較は DanceTrack で足りる | — |
+| TAO | 多くのクラス(LVIS の語彙) | 使わない | 大きすぎる(約 114 GiB)。オープンボキャブラリーの追跡をするときに考える | — |
+| CrowdHuman | person(人) | 後で決める | 人の検出器の学習に足す慣例があるが、追跡の比較では検出を固定するので、まずは不要。人の検出が弱いとわかったら考える | 未確認 |
 
 合計は約 33 GB(MOT17 + DanceTrack の train・val + KITTI MOTS)。
 

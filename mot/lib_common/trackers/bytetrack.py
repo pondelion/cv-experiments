@@ -19,6 +19,11 @@ MOT の仕組み(動画全体での物体の ID の管理):
 出力(公式の mot_evaluator と同じ): 確定して追跡している物体の、カルマンフィルタで直した枠。面積 ≤ min_box_area と、
 横長(幅 ÷ 高さ > 1.6。歩行者のデータのとき)の枠は書かない。
 
+見た目の特徴(with_reid。mot/exp00201): BoT-SORT(NirAharon/BoT-SORT の `tracker/bot_sort.py`・`matching.py`)の使い方だけを足せる
+(BoT-SORT のほかの部分(カメラの動きの補正・カルマンフィルタの状態の取り方)は足さない。見た目の特徴の効き目だけを比べるため)。
+確信度の高い検出に特徴を付け、1 段目と確定していない物体の照合の費用を、見た目の距離との小さい方にする(_cost)。物体の特徴は
+照合のたびに指数移動平均で更新する。確信度の低い検出との 2 段目は枠の IoU だけ(公式と同じ)。
+
 公式との違い: 公式の評価(mot_evaluator)は MOT17 の test の動画ごとに track_thresh・track_buffer を手で変えている。ここでは動画ごとに
 変えず、val の役のセットで 1 組を選ぶ(mot/README.md の方針)。
 """
@@ -53,6 +58,10 @@ class ByteTrackConfig:
         min_box_area: 出力する枠の面積の下限。
         max_aspect: 出力する枠の幅 ÷ 高さの上限(None なら制限しない。公式は歩行者のデータで 1.6)。
         duplicate_iou: 追跡している物体と見失った物体の枠が重なりすぎとみなす IoU(公式は 1 − 0.15)。
+        with_reid: 見た目の特徴を照合に使うか(BoT-SORT の使い方。mot/exp00201)。既定は使わない(公式の ByteTrack)。
+        proximity_thresh: 見た目の特徴を使う組の、枠の IoU の距離(1 − IoU)の上限(BoT-SORT の公式の既定 0.5)。
+        appearance_thresh: 使う見た目の距離(cos の距離 ÷ 2)の上限(BoT-SORT の公式の既定 0.25)。
+        feat_alpha: 物体の特徴の指数移動平均の係数(古い特徴の重み。BoT-SORT の公式は 0.9)。
     """
     track_thresh: float = 0.6
     low_thresh: float = 0.1
@@ -64,6 +73,10 @@ class ByteTrackConfig:
     min_box_area: float = 100.0
     max_aspect: float | None = 1.6
     duplicate_iou: float = 0.85
+    with_reid: bool = False
+    proximity_thresh: float = 0.5
+    appearance_thresh: float = 0.25
+    feat_alpha: float = 0.9
 
 
 def tlwh_to_xyah(b: np.ndarray) -> np.ndarray:
@@ -92,6 +105,9 @@ class Track:
         is_activated: 確定したか。
         frame_id: 最後に照合したフレーム。
         start_frame: 始めたフレーム。
+        extra: 検出ごとに持たせる情報(マスクなど。出力に写す)。
+        curr_feat: 最後に照合した検出の見た目の特徴(長さ 1 に正規化。見た目を使わないときは None)。
+        smooth_feat: 見た目の特徴の指数移動平均(長さ 1 に正規化。BoT-SORT の smooth_feat)。
     """
     tlwh: np.ndarray
     score: float
@@ -103,6 +119,20 @@ class Track:
     frame_id: int = 0
     start_frame: int = 0
     extra: dict = field(default_factory=dict)
+    curr_feat: np.ndarray | None = None
+    smooth_feat: np.ndarray | None = None
+
+    def update_feat(self, feat: np.ndarray, alpha: float) -> None:
+        """見た目の特徴を足す(BoT-SORT の update_features と同じ規則)。
+
+        Args:
+            feat: 検出の特徴 (C,)。
+            alpha: 指数移動平均の係数(古い特徴の重み)。
+        """
+        f = feat / max(np.linalg.norm(feat), 1e-12)
+        self.curr_feat = f
+        s = f if self.smooth_feat is None else alpha * self.smooth_feat + (1 - alpha) * f
+        self.smooth_feat = s / max(np.linalg.norm(s), 1e-12)
 
     @property
     def box(self) -> np.ndarray:
@@ -149,21 +179,33 @@ class ByteTracker:
         for t, m, c in zip(tracks, mean, cov):
             t.mean, t.cov = m, c
 
-    def _cost(self, tracks: list[Track], dets: list[Track], fuse: bool) -> np.ndarray:
-        """照合の費用 1 − IoU(fuse なら 1 − IoU × 検出の確信度)。
+    def _cost(self, tracks: list[Track], dets: list[Track], fuse: bool, reid: bool = False) -> np.ndarray:
+        """照合の費用 1 − IoU(fuse なら 1 − IoU × 検出の確信度)。reid で見た目の特徴を使う設定なら、BoT-SORT と同じく
+        見た目の距離(cos の距離 ÷ 2)との小さい方にする。見た目の距離は、appearance_thresh を超える組と、枠の IoU の距離
+        (確信度を掛ける前)が proximity_thresh を超える組では使わない(1 にする)。
 
         Args:
             tracks: 物体の並び。
             dets: 検出の並び。
             fuse: 確信度を掛けるか。
+            reid: この段の照合で見た目の特徴を使うか(BoT-SORT は 1 段目と確定していない物体の照合で使う)。
 
         Returns:
             (物体の数, 検出の数)。
         """
         iou = box_iou(np.array([t.tlbr for t in tracks]).reshape(-1, 4), np.array([d.tlbr for d in dets]).reshape(-1, 4))
+        far = (1 - iou) > self.cfg.proximity_thresh  # 見た目を使わない、離れた組(確信度を掛ける前の IoU の距離)
         if fuse and len(dets):
             iou = iou * np.array([d.score for d in dets])[None, :]
-        return 1 - iou
+        cost = 1 - iou
+        if reid and self.cfg.with_reid and len(tracks) and len(dets):
+            tf = np.stack([t.smooth_feat for t in tracks])  # (物体の数, C)
+            df = np.stack([d.curr_feat for d in dets])  # (検出の数, C)
+            emb = np.maximum(0.0, 1 - tf @ df.T) / 2  # cos の距離 ÷ 2(どちらも長さ 1)
+            emb[emb > self.cfg.appearance_thresh] = 1.0
+            emb[far] = 1.0
+            cost = np.minimum(cost, emb)
+        return cost
 
     def _update(self, t: Track, d: Track, refind: bool) -> None:
         """物体を検出で直す(公式の update・re_activate)。
@@ -176,6 +218,8 @@ class ByteTracker:
         t.mean, t.cov = self.kf.update(t.mean, t.cov, tlwh_to_xyah(d.tlwh))
         t.state, t.is_activated, t.frame_id, t.score = State.TRACKED, True, self.frame_id, d.score
         t.extra = d.extra
+        if d.curr_feat is not None:  # 特徴を持つのは確信度の高い検出だけ(BoT-SORT と同じ)
+            t.update_feat(d.curr_feat, self.cfg.feat_alpha)
 
     def update(self, boxes: np.ndarray, scores: np.ndarray, extras: list[dict] | None = None) -> list[Track]:
         """1 フレーム分を処理する(公式の BYTETracker.update)。
@@ -194,13 +238,16 @@ class ByteTracker:
         make = lambda idx: [Track(np.asarray(boxes[i], float), float(scores[i]), extra=extras[i]) for i in idx]
         high = make(np.nonzero(scores > c.track_thresh)[0])
         low = make(np.nonzero((scores > c.low_thresh) & (scores < c.track_thresh))[0])
+        if c.with_reid:  # 見た目の特徴は確信度の高い検出だけに付ける(BoT-SORT は確信度の高い検出だけ特徴を計算する)
+            for d in high:
+                d.update_feat(np.asarray(d.extra["feat"], dtype=np.float64), c.feat_alpha)
         unconfirmed = [t for t in self.tracked if not t.is_activated]
         confirmed = [t for t in self.tracked if t.is_activated]
         activated, refound, newly_lost, removed = [], [], [], []
         # 1 段目: 追跡している物体 + 見失った物体 と 確信度の高い検出
         pool = confirmed + [t for t in self.lost if t not in confirmed]
         self._predict(pool)
-        pairs, u_track, u_det = linear_assignment(self._cost(pool, high, c.fuse_score), c.match_thresh)
+        pairs, u_track, u_det = linear_assignment(self._cost(pool, high, c.fuse_score, reid=True), c.match_thresh)
         for ti, di in pairs:
             t = pool[ti]
             (activated if t.state == State.TRACKED else refound).append(t)
@@ -216,7 +263,7 @@ class ByteTracker:
             newly_lost.append(rest[i])
         # 3 段目: 確定していない物体 と 1 段目で残った確信度の高い検出
         high = [high[i] for i in u_det]
-        pairs, u_unc, u_det = linear_assignment(self._cost(unconfirmed, high, c.fuse_score), c.unconfirmed_thresh)
+        pairs, u_unc, u_det = linear_assignment(self._cost(unconfirmed, high, c.fuse_score, reid=True), c.unconfirmed_thresh)
         for ti, di in pairs:
             activated.append(unconfirmed[ti])
             self._update(unconfirmed[ti], high[di], refind=False)

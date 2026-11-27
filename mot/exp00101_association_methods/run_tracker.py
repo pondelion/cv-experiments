@@ -22,15 +22,13 @@ KITTI MOTS のマスク: 評価(TrackEval の KittiMOTS)は 1 つのフレーム
 import argparse
 import json
 from dataclasses import asdict, replace
-from pathlib import Path
 
 import common
-import numpy as np
-from pycocotools import mask as mask_utils
 
 from mot.lib_common.detections import load_detections
 from mot.lib_common.evaluate import evaluate_kitti_mots, evaluate_mot, write_kitti_mots_results, write_mot_results
-from mot.lib_common.sets import Sequence, load_sequences
+from mot.lib_common.sets import load_sequences
+from mot.lib_common.tracking import dataset_of, kitti_rows, track_boxes
 from mot.lib_common.trackers.bytetrack import ByteTrackConfig, ByteTracker
 from mot.lib_common.trackers.ocsort import OCSortConfig, OCSortTracker
 from mot.lib_common.trackers.sort import SortConfig, SortTracker
@@ -40,73 +38,6 @@ DEFAULT_DETECTOR = "gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100"  # exp00003 で
 TRACKERS = {"bytetrack": (ByteTrackConfig, ByteTracker, "track_thresh"),
             "sort": (SortConfig, SortTracker, "det_thresh"),
             "ocsort": (OCSortConfig, OCSortTracker, "det_thresh")}
-KITTI_CLASS = {"car": 1, "person": 2}  # KITTI MOTS のクラスの番号(1 = 車、2 = 歩行者)
-
-
-def dataset_of(set_name: str) -> str:
-    """評価のセットの名前から、検出を保存したデータセットの名前を返す。
-
-    Args:
-        set_name: 例 "mot17_val"。
-
-    Returns:
-        "mot17"・"dancetrack"・"kitti_mots" のどれか。
-    """
-    return next(d for d in ("mot17", "dancetrack", "kitti_mots") if set_name.startswith(d))
-
-
-def track_boxes(tracker_cls: type, cfg, seq: Sequence, frames: list[list[dict]], label: int) -> list[tuple]:
-    """1 本の動画の 1 つのクラスを、指定した追跡の手法で追跡する。
-
-    Args:
-        tracker_cls: 追跡の型(TRACKERS の 2 つ目)。
-        cfg: 追跡の設定(TRACKERS の 1 つ目の型)。
-        seq: 動画(セットの範囲)。
-        frames: 動画の全部のフレームの検出(exp00003 の形)。
-        label: 追跡するクラス。
-
-    Returns:
-        (フレーム(セットの中の番号、1 始まり), ID, 左, 上, 幅, 高さ, 確信度, マスクの RLE) の並び。
-    """
-    tracker = tracker_cls(cfg, seq.fps)
-    out = []
-    for t in range(seq.num_frames):
-        dets = [d for d in frames[seq.first_frame - 1 + t] if d["label"] == label]
-        boxes = np.array([d["bbox"] for d in dets], float).reshape(-1, 4)
-        scores = np.array([d["score"] for d in dets], float)
-        for tr in tracker.update(boxes, scores, [{"rle": d["segmentation"]} for d in dets]):
-            if tracker.keep_output(tr):
-                out.append((t + 1, tr.track_id, *tr.box.tolist(), tr.score, tr.extra["rle"]))
-    return out
-
-
-def kitti_rows(per_class: dict[int, list[tuple]], height: int, width: int) -> list[tuple]:
-    """KITTI MOTS の結果の行を作る(フレームの中でマスクが重ならないように、確信度の高い物体から画素を取る)。
-
-    Args:
-        per_class: {クラス: track_boxes の返り値}。
-        height: 画像の高さ。
-        width: 画像の幅。
-
-    Returns:
-        evaluate.write_kitti_mots_results に渡す (フレーム(0 始まり), ID, クラス, 縦, 横, RLE) の並び。
-    """
-    by_frame: dict[int, list] = {}
-    for cls, rows in per_class.items():
-        offset = 0 if cls == "car" else 100000  # クラスの間で ID が重ならないようにする
-        for t, tid, *_, score, rle in rows:
-            by_frame.setdefault(t, []).append((score, tid + offset, KITTI_CLASS[cls], rle))
-    out = []
-    for t in sorted(by_frame):
-        taken = np.zeros((height, width), bool)
-        for score, tid, c, rle in sorted(by_frame[t], key=lambda r: -r[0]):
-            m = mask_utils.decode(rle).astype(bool) & ~taken
-            if not m.any():
-                continue
-            taken |= m
-            enc = mask_utils.encode(np.asfortranarray(m.astype(np.uint8)))
-            out.append((t - 1, tid, c, height, width, enc["counts"].decode("ascii")))
-    return out
 
 
 def run(detector: str, set_name: str, tracker: str, cfg, name: str) -> dict:

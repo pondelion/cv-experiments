@@ -102,7 +102,9 @@ def _mot_style_sequences(seq_dirs: list[Path], frame_range=None) -> list[tuple[S
         info = _seqinfo(d)
         n = int(info["seqLength"])
         first, count = frame_range(n) if frame_range else (1, n)
-        out.append((Sequence(d.name, str(d / "img1"), "{:06d}" + info["imExt"], first, count, int(info["imWidth"]),
+        # 画像のファイル名の桁数は、データセットで違う(MOT17 は 6 桁、DanceTrack は 8 桁)ので、最初の画像の名前から決める
+        digits = len(next((d / "img1").glob("*" + info["imExt"])).stem)
+        out.append((Sequence(d.name, str(d / "img1"), f"{{:0{digits}d}}" + info["imExt"], first, count, int(info["imWidth"]),
                              int(info["imHeight"]), float(info["frameRate"])), d / "gt" / "gt.txt"))
     return out
 

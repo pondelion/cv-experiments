@@ -16,6 +16,8 @@ DETECTORS = [("gtr_cnxtb_dinov3_bighead640s4_cls8_2k_ep100", "GTR 系", "COCO �
              ("gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const", "GTR 系", "VIPSeg のフレーム(8 クラス)"),
              ("minvis_cnxtb_dinov3_cls8_ep100_const", "Mask2Former(MinVIS の画像のモデル)", "VIPSeg のフレーム(8 クラス)")]
 SETS = [("mot17", ["pedestrian"]), ("dancetrack", ["pedestrian"]), ("kitti_mots", ["car", "pedestrian"])]
+# 見出しに書く、セットのクラスと、それに使った検出のクラス(学習のデータ(COCO・VIPSeg の 8 クラス)のクラスの名前)
+CLASS_NOTE = {"pedestrian": "pedestrian(person で代用)", "car": "car"}
 # (結果のファイルの名前の先頭, 表に書く追跡の手法の名前, 選ぶ閾値の名前, 公式の閾値の値)
 TRACKERS = [("bytetrack", "ByteTrack", "track_thresh", 0.6),
             ("sort", "SORT", "det_thresh", 0.0),  # 公式は確信度で検出を選ばない(全部使う)ので、公式の値は 0
@@ -80,7 +82,9 @@ def main() -> None:
     out = []
     for ds, classes in SETS:
         for cls in classes:
-            out += [f"#### {ds}_test" + (f"({cls})" if len(classes) > 1 else "") + "\n",
+            # 見出しにセットの対象のクラスを書く(クラスが 2 つ以上のセットは、クラスごとの表なので、どのクラスの表かも書く)
+            out += [f"#### {ds}_test({', '.join(CLASS_NOTE[c] for c in classes)})" + (f": {cls} の結果" if len(classes) > 1 else "")
+                    + "\n",
                     "| 追跡の手法 | セグメンテーションのモデル | 学習のデータ | 閾値 | HOTA | DetA | AssA | LocA | MOTA | IDF1 | IDSW |",
                     "|---|---|---|---|---|---|---|---|---|---|---|"]
             for prefix, tracker, th_name, official in TRACKERS:

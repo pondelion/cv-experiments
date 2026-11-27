@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from lib_common import REPO_ROOT
 from segmentation.instance_segmentation.lib_common.evaluate import save_metrics
 from segmentation.instance_segmentation.lib_common.losses.video_consistent_criterion import VideoConsistentCriterion
-from segmentation.instance_segmentation.lib_common.train import build_optimizer, build_scheduler
+from segmentation.instance_segmentation.lib_common.train import amp_autocast, build_optimizer, build_scheduler
 from segmentation.instance_segmentation.lib_common.video_data import (VideoClipDataset, VideoEvalDataset, collate_clips,
                                                                        load_video_set)
 from segmentation.instance_segmentation.lib_common.video_eval import evaluate_frames, evaluate_vis
@@ -54,6 +54,9 @@ class VideoTrainConfig:
     frame_range: int = 2
     frame_skip_p: float = 0.0  # 0 より大きいと、区間をフレームの間引きのデータ拡張つきで選ぶ(video_data.sample_clip_skip)
     frame_skip_random_p: float = 0.0  # 間引きのうち、等間隔の代わりに無作為に選ぶ確率
+    # 学習の変換("lsj": 長辺 0.1〜2.0 倍 + 正方形の切り抜き / "videomt_vipseg": 公式の VidEoMT の VIPSeg の変換を S に縮めたもの
+    # (切り抜きなし。video_data.video_train_transforms_videomt_vipseg))
+    train_aug: str = "lsj"
     batch_size: int = 8  # 1 回の optimizer step あたりの区間の数
     grad_accum: int = 1  # gradient accumulation steps(micro-batch size = batch_size / grad_accum)
     steps: int = 40000
@@ -72,7 +75,9 @@ class VideoTrainConfig:
     num_blocks: int = 3
     norm_queries: bool = True  # 補助の予測と次のフレームへ渡すクエリに LayerNorm をかける(公式の VIPSeg の DINOv3 の設定)
     # DVIS(arch="dvis"): 固定する segmenter(画像の Mask2Former の学習の best.pt。同じ場所の config.json で作り方を読む)、
-    # 追跡の部の層の数(公式 6)、学習の初めのこの割合の step は割り当てを segmenter の予測で決める(公式は MAX_ITER // 2)
+    # 追跡の部の層の数(公式 6)、学習の初めのこの割合の step は割り当てを segmenter の予測で決める(公式は MAX_ITER // 2)。
+    # GTR 系の動画版(arch="gtr_track")では、初期の重みにする画像の GTR 系の学習の best.pt(固定せず、全体を学習する。
+    # None なら backbone だけ学習済みの重みで、後ろは初期の値から)
     segmenter: str | None = None
     tracker_layers: int = 6
     dvis_guide_frac: float = 0.5
@@ -91,7 +96,42 @@ class VideoTrainConfig:
     workers: int = 6
     seed: int = 0
     max_vram_gb: float | None = 15.0
+    amp: bool = True  # AMP(autocast)を使うか。学習の forward・損失と推論を amp_dtype で計算する(重み・optimizer は float32)
+    amp_dtype: str = "bfloat16"  # AMP の精度。"bfloat16" だけ(float16 は損失のスケーリング(GradScaler)が要り、まだ対応していない)
+    # 方式ごとの部品を torch.compile する(細かい GPU の処理を 1 つにまとめ、起動の回数を減らす。損失は丸めの範囲で同じ)。
+    # SAM 2: 記憶の注意・記憶の encoder・マスクの decoder・プロンプトの encoder
+    compile_modules: bool = False
+    # 形が固定の部分を CUDA graph で記録して再生する(Python・PyTorch の演算の処理・GPU の処理の起動を通らない。計算は同じ)。
+    # GTR 系の動画版(arch="gtr_track"): 学習の encode(backbone + encoder)
+    cuda_graph: bool = False
+    # SAM 2(arch="sam2"): 区間ごとの物体の数を最大(3)に埋めて形を固定する(compile のし直しを減らす)。埋める物体は 1 つ目の
+    # 物体の複製で、損失の重みを 0 にする(物体どうしは計算の中で混ざらないので、本物の物体の損失と勾配は同じ)
+    sam2_pad_objects: bool = False
     max_steps: int | None = None  # 動作確認用
+
+
+def compile_video_modules(model: torch.nn.Module, arch: str) -> None:
+    """方式ごとの部品を torch.compile に置き換える(compile_modules)。
+
+    形の違い(物体の数・記憶のフレームの数など)ごとに compile し直すので、その上限を上げる。inductor の分け方の解析
+    (coalesce_tiling_analysis)は、この版の PyTorch で内部の誤りが出たので切る(計算は同じ)。
+
+    Args:
+        model: 学習するモデル。
+        arch: 方式の名前。
+    """
+    import torch._dynamo.config as dynamo_cfg
+    import torch._inductor.config as inductor_cfg
+    inductor_cfg.triton.coalesce_tiling_analysis = False
+    dynamo_cfg.cache_size_limit, dynamo_cfg.accumulated_cache_size_limit = 64, 512
+    names = {"sam2": ("memory_attention", "memory_encoder", "sam_mask_decoder", "sam_prompt_encoder"),
+             "sam3_vis": ("memory_attention", "memory_encoder", "sam_mask_decoder", "sam_prompt_encoder")}.get(arch)
+    if names is None:
+        raise ValueError(f"compile_modules に対応していない方式: {arch}")
+    if arch == "sam3_vis":  # SAM 3 型は追跡の部分(SAM 2 の部品)を compile する
+        model = model.sam2
+    for name in names:  # nn.Module.compile はその場で compile する(重みの名前が変わらないので、保存した重みを compile なしでも読める)
+        getattr(model, name).compile()
 
 
 def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Module:
@@ -123,21 +163,35 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
     if cfg.arch == "cavis":  # 学習済みの CAVIS の segmenter(arch="cavis_seg" の best.pt)を固定し、CAVIS の追跡の部を学習する
         from segmentation.instance_segmentation.lib_common.models.video.cavis import CAVISOnline, load_cavis_segmenter
         return CAVISOnline(load_cavis_segmenter(cfg.segmenter), num_classes, cfg.tracker_layers)
+    if cfg.arch == "m2f_videomt":  # Mask2Former × VidEoMT 型(画像の Mask2Former の学習の best.pt から始め、全体を学習する)
+        from segmentation.instance_segmentation.lib_common.models.video.m2f_videomt import M2FVidEoMT
+        return M2FVidEoMT.from_run(cfg.segmenter, cfg.train_set)
     if cfg.arch == "dvis":  # 学習済みの画像のモデル(MinVIS の学習の Mask2Former、または GTR 系の画像の学習の best.pt)を固定し、
         # 追跡の部だけを学習する
         from segmentation.instance_segmentation.lib_common.models.video.dvis import DVISOnline, load_segmenter
         from segmentation.instance_segmentation.lib_common.models.video.image_adapter import ImageSegmenter
-        seg_arch = json.loads((Path(cfg.segmenter).parent / "config.json").read_text()).get("arch")
+        seg_cfg = json.loads((Path(cfg.segmenter).parent / "config.json").read_text())
+        seg_arch = seg_cfg.get("arch")
         # どちらも出力のクラスの番号を、学習の動画のセットの並びにそろえる(画像のセットと並びが違うことがある)
         segmenter = ImageSegmenter.from_run(cfg.segmenter, cfg.train_set) if seg_arch == "gtr_seg" else \
             load_segmenter(cfg.segmenter, cfg.train_set)
-        return DVISOnline(segmenter, num_classes, cfg.tracker_layers)
+        # 追跡の部の次元は segmenter のクエリの次元に合わせる(公式も Mask2Former の HIDDEN_DIM を使う)。Mask2Former は 256。
+        # GTR 系は model_kwargs の dim(なければ既定の 256)。マスクを作る画素の特徴(mask_dim。なければ dim)も同じ次元であること
+        kw = seg_cfg.get("model_kwargs", {}) if seg_arch == "gtr_seg" else {}
+        dim = kw.get("dim", 256)
+        if kw.get("mask_dim") not in (None, dim):
+            raise ValueError(f"DVIS には、クエリと画素の特徴が同じ次元の segmenter が要る(dim {dim}、mask_dim {kw['mask_dim']})")
+        return DVISOnline(segmenter, num_classes, cfg.tracker_layers, dim=dim)
     if cfg.arch == "deva":  # DEVA の伝搬のネットワーク(クラスによらない。画素の encoder の幹は exp の backbone)
         from segmentation.instance_segmentation.lib_common.models.video.deva.network import DEVA
         return DEVA(cfg.backbone, cfg.size)
     if cfg.arch == "sam2":  # SAM 2(記憶つきの物体ごとの伝搬。backbone は timm の学習済みの重み)
         from segmentation.instance_segmentation.lib_common.models.video.sam2.model import SAM2
         return SAM2(cfg.backbone, cfg.size)
+    if cfg.arch == "sam3_vis":  # SAM 3 型(検出の部分 = 学習済みの画像の Mask2Former(segmenter)、backbone を共有して固定し、
+        # SAM 2 と同じ追跡の部分を学習する。models/video/sam3_vis.py)
+        from segmentation.instance_segmentation.lib_common.models.video.sam3_vis import SAM3VIS
+        return SAM3VIS(cfg.segmenter, cfg.train_set, cfg.size)
     if cfg.arch == "dvis_daq":  # 学習済みの segmenter(公式は DVIS++ の segmenter = CTVIS)を固定し、DAQ の追跡の部を学習する
         from segmentation.instance_segmentation.lib_common.models.video.dvis import load_segmenter
         from segmentation.instance_segmentation.lib_common.models.video.dvis_daq import DVISDAQOnline
@@ -146,6 +200,11 @@ def build_video_model(cfg: VideoTrainConfig, num_classes: int) -> torch.nn.Modul
         segmenter = load_ctvis_segmenter(cfg.segmenter) if seg_cfg.get("arch") == "ctvis" else \
             load_segmenter(cfg.segmenter, cfg.train_set)
         return DVISDAQOnline(segmenter, num_classes, cfg.daq_first_stage_frac)
+    if cfg.arch == "gtr_track":  # GTR 系の動画版(画像の GTR 系の学習の重みから始め、追跡のクエリを引き継ぐ形で全体を学習する)
+        from segmentation.instance_segmentation.lib_common.models.video.gtr_track import GTRTrack
+        if cfg.segmenter is None:  # backbone だけ学習済みの重み、後ろは初期の値から(VidEoMT A と同じ始め方)
+            return GTRTrack.from_scratch(cfg.backbone, num_classes)
+        return GTRTrack.from_run(cfg.segmenter, cfg.train_set)
     if cfg.arch == "dvis_plus":  # 学習済みの CTVIS の Mask2Former(arch="ctvis" の学習の best.pt)を固定し、DVIS++ の追跡の部を学習する
         from segmentation.instance_segmentation.lib_common.models.video.dvis_plus import DVISPlusOnline, load_ctvis_segmenter
         return DVISPlusOnline(load_ctvis_segmenter(cfg.segmenter), num_classes, cfg.tracker_layers, cfg.noise_ratio)
@@ -167,13 +226,17 @@ def build_video_optimizer(model: torch.nn.Module, cfg: VideoTrainConfig) -> torc
     Returns:
         optimizer。
     """
-    if cfg.arch == "sam2":  # 公式の SAM 2 の学習の分け方: image_encoder.*(幹と neck)は lr × backbone_lr_mult(公式の vision_lr)、
-        # 幹の ViT の層は層ごとの減衰 0.9(i 番目の層は 0.9^(層の数 − i)、埋め込みは 0.9^(層の数 + 1)、pos_embed は減衰なし)、
-        # weight decay は bias と LayerNorm の重みだけ 0
+    if cfg.arch in ("sam2", "sam3_vis"):  # 公式の SAM 2 の学習の分け方: image_encoder.*(幹と neck)は lr × backbone_lr_mult(公式の
+        # vision_lr)、幹の ViT の層は層ごとの減衰 0.9(i 番目の層は 0.9^(層の数 − i)、埋め込みは 0.9^(層の数 + 1)、pos_embed は減衰なし)、
+        # weight decay は bias と LayerNorm の重みだけ 0。SAM 3 型は追跡の部分(SAM 2)だけを学習する(幹は固定なので組に入らない)
+        if cfg.arch == "sam3_vis":
+            model = model.sam2
         n_blocks = len(model.image_encoder.trunk.vit.blocks)
         ln_ids = {id(p) for mod in model.modules() if isinstance(mod, torch.nn.LayerNorm) for p in mod.parameters(recurse=False)}
         groups = []
         for n, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
             mult = cfg.backbone_lr_mult if n.startswith("image_encoder.") else 1.0
             if n.startswith("image_encoder.trunk.vit."):
                 sub = n[len("image_encoder.trunk.vit."):]
@@ -188,6 +251,23 @@ def build_video_optimizer(model: torch.nn.Module, cfg: VideoTrainConfig) -> torc
         from types import SimpleNamespace
         return build_optimizer(SimpleNamespace(optimizer="sgd", arch="maskrcnn", lr=cfg.lr, weight_decay=cfg.weight_decay,
                                                momentum=0.9), model)
+    if cfg.arch == "gtr_track":  # 画像の GTR 系と同じ分け方(backbone は lr × backbone_lr_mult、名前に norm・bn・bias を含む重みは
+        # weight decay 0)。query_updater はそれ以外の組。"backbone" は 2 段の warmup の見分け(ほかの方式と同じ)
+        nd = lambda n: any(s in n for s in ("norm", "bn", "bias"))
+        groups = []
+        for n, p in model.named_parameters():
+            # ViT の adapter の STA と融合の層は学習済みの重みがないので backbone の倍率をかけない(画像の GTR 系と同じ)
+            is_bb = n.startswith("gtr.backbone.") and not n.startswith(("gtr.backbone.sta.", "gtr.backbone.fuse."))
+            groups.append({"params": [p], "lr": cfg.lr * (cfg.backbone_lr_mult if is_bb else 1.0),
+                           "weight_decay": 0.0 if nd(n) else cfg.weight_decay, "backbone": is_bb})
+        return torch.optim.AdamW(groups, fused=True)
+    if cfg.arch == "m2f_videomt":  # Mask2Former の部分は画像の Mask2Former の学習と同じ分け方、query_updater は lr・wd そのまま
+        from types import SimpleNamespace
+        opt = build_optimizer(model.segmenter, SimpleNamespace(optimizer="adamw", arch="mask2former", lr=cfg.lr,
+                                                               weight_decay=cfg.weight_decay, backbone_lr_mult=cfg.backbone_lr_mult))
+        opt.add_param_group({"params": list(model.query_updater.parameters()), "lr": cfg.lr, "weight_decay": cfg.weight_decay,
+                             "backbone": False})
+        return opt
     if cfg.arch in ("ctvis", "cavis_seg"):  # 画像の Mask2Former と同じ分け方(backbone は lr × backbone_lr_mult、正規化・埋め込みは wd 0)
         from types import SimpleNamespace
         return build_optimizer(SimpleNamespace(optimizer="adamw", arch="mask2former", lr=cfg.lr, weight_decay=cfg.weight_decay,
@@ -241,15 +321,16 @@ def evaluate_video_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainCon
     order = [i for i, v in enumerate(ds.videos) if limit is None or v["id"] in keep]
     loader = DataLoader(torch.utils.data.Subset(ds, order), batch_size=None, num_workers=min(cfg.workers, 4))
     preds, t0 = [], time.time()
+    torch.cuda.empty_cache()  # 学習で確保したまま使っていないメモリを、評価の前に返す(評価の終わりでも返す)
     for item in loader:
         if hasattr(model, "track_video"):  # SAM 3 型(sam2/tracker.py)・DEVA(deva/inference.py): ID ごとの予測を直接作る
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with amp_autocast(cfg):
                 tracks = model.track_video(item["images"].cuda(non_blocking=True), tuple(item["valid_size"]),
                                            tuple(item["orig_size"]))
             preds += model.to_predictions(tracks, item["video_id"], cat_ids, cfg.size, tuple(item["valid_size"]),
                                           tuple(item["orig_size"]), len(item["images"]))
             continue
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with amp_autocast(cfg):
             logits, masks = model.predict_video(item["images"].cuda(non_blocking=True))
         preds += video_predictions(logits, masks, item["video_id"], cat_ids, cfg.size, item["valid_size"], item["orig_size"],
                                    cfg.top_k, getattr(model, "activation", "softmax"))  # GTR 系の画像のモデルを使う方式は sigmoid
@@ -278,6 +359,7 @@ def evaluate_vos_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfi
     from segmentation.instance_segmentation.lib_common.video_eval import evaluate_jf
     was_training = model.training
     model.eval()
+    torch.cuda.empty_cache()  # 学習で確保したまま使っていないメモリを、評価の前に返す(評価の終わりでも返す)
     gt = load_video_set(set_name)
     videos = gt["videos"][:limit] if limit is not None else gt["videos"]
     keep = {v["id"] for v in videos}
@@ -303,12 +385,12 @@ def evaluate_vos_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfi
             from segmentation.instance_segmentation.lib_common.models.video.deva.inference import propagate_vos
             first = {a["id"]: (s, to_input_mask(a["segmentations"][s], valid, cfg.size, frames.device))
                      for s, group in by_start.items() for a in group}
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with amp_autocast(cfg):
                 outs = propagate_vos(model, frames, first)
             for oid, m in outs.items():
                 tracks[oid] = to_orig_rles(m * 2 - 1, valid, orig)  # 0/1 → 値 > 0 が物体
             continue
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with amp_autocast(cfg):
             outs = propagate(model, frames, prompts)
         for s, group in by_start.items():
             for k, a in enumerate(group):
@@ -318,6 +400,35 @@ def evaluate_vos_set(model: torch.nn.Module, set_name: str, cfg: VideoTrainConfi
     result = {**evaluate_jf(gt, tracks), "n_videos": len(order), "s_per_video": s_per_video}
     model.train(was_training)
     return result
+
+
+def _retry_oom(fn):
+    """評価の関数を包み、GPU のメモリが足りずに止まったら、使っていないメモリを返してから 1 回だけやり直す(2 回目も足りなければ
+    そのまま止める。隠さない)。
+
+    Args:
+        fn: 評価の関数(evaluate_video_set・evaluate_vos_set)。
+
+    Returns:
+        fn と同じ引数・返り値の関数。
+    """
+    def wrapped(*args, **kwargs):
+        """fn を呼び、メモリが足りなければ 1 回だけやり直す。
+
+        Args:
+            *args: fn の位置引数。
+            **kwargs: fn のキーワード引数。
+
+        Returns:
+            fn の返り値。
+        """
+        try:
+            return fn(*args, **kwargs)
+        except torch.OutOfMemoryError:
+            print("[eval] GPU のメモリが足りないので、使っていないメモリを返してやり直す", flush=True)
+            torch.cuda.empty_cache()
+            return fn(*args, **kwargs)
+    return wrapped
 
 
 def _timestamp(t0: float) -> dict:
@@ -349,13 +460,20 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True); res_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=1, ensure_ascii=False))
     ds = VideoClipDataset(cfg.train_set, cfg.clip_len, cfg.frame_range, cfg.size, cfg.seed, cfg.frame_skip_p,
-                          cfg.frame_skip_random_p)
+                          cfg.frame_skip_random_p, cfg.train_aug)
     num_classes = len(ds.cat_ids)
     deva_s0 = cfg.arch == "deva" and cfg.deva_stage == 0
     if deva_s0:  # DEVA の静止画の段階: 学習のセットのフレーム 1 枚 + 物体 1 個から 3 フレームを作る(deva/static_data.py)
         from segmentation.instance_segmentation.lib_common.models.video.deva.static_data import StaticPseudoVideoDataset
         ds = StaticPseudoVideoDataset(cfg.train_set, cfg.size, cfg.clip_len, cfg.seed)
     model = build_video_model(cfg, num_classes).cuda()
+    if cfg.compile_modules:
+        compile_video_modules(model, cfg.arch)
+    if cfg.cuda_graph:
+        if cfg.arch != "gtr_track":
+            raise ValueError(f"cuda_graph に対応していない方式: {cfg.arch}")
+        model.enable_graphed_encode(cfg.batch_size // cfg.grad_accum, cfg.clip_len, cfg.size,
+                                    amp_autocast(cfg, cache_enabled=False))
     if cfg.init_model:  # 前の学習のモデル全体の重みから続ける
         model.load_state_dict(torch.load(cfg.init_model, map_location="cuda"))
     if cfg.arch == "ctvis":  # フレームごとの画像の損失 + reid の対照学習
@@ -367,6 +485,14 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     else:  # VidEoMT・DVIS: 物体が最初に写ったフレームでの割り当て + フレームごとの損失
         criterion = VideoConsistentCriterion(num_classes).cuda()
     optimizer = build_video_optimizer(model, cfg)
+    # DEVA に画像のモデル(segmenter: 画像の学習の best.pt)を与えたら、評価は画像のモデルと組み合わせた動画の AP で行う
+    # (画像のモデルは固定。optimizer に入れない)。ほかの方式は学習するモデルをそのまま評価する
+    deva_vis = cfg.arch == "deva" and cfg.segmenter is not None
+    eval_model = model
+    if deva_vis:
+        from segmentation.instance_segmentation.lib_common.models.video.deva.inference import DEVAVideo
+        from segmentation.instance_segmentation.lib_common.models.video.image_adapter import ImageSegmenter
+        eval_model = DEVAVideo(model, ImageSegmenter.from_run(cfg.segmenter, cfg.train_set).cuda().eval())
     micro = cfg.batch_size // cfg.grad_accum
     steps_per_epoch = len(ds) // micro // cfg.grad_accum
     total = cfg.max_steps or (cfg.epochs * steps_per_epoch if cfg.epochs else cfg.steps)
@@ -395,33 +521,52 @@ def train_video(cfg: VideoTrainConfig) -> dict:
                     images = batch["images"].cuda(non_blocking=True)[[b for b, _ in picked]]
                     cls_gt = torch.stack([p[0] for _, p in picked]); first = torch.stack([p[1] for _, p in picked])
                     sel = torch.stack([p[2] for _, p in picked]); nobj = [p[3] for _, p in picked]
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                    with amp_autocast(cfg):
                         out = deva_tr.train_forward(model, images, first, sel, 2 if deva_s0 else deva_tr.NUM_REF_FRAMES)
                         loss, parts = deva_tr.deva_loss(out, cls_gt, nobj, step)
                 else:
-                    loss, parts = batch["images"].cuda().sum() * 0, {}
-            elif cfg.arch == "sam2":  # 区間ごとに物体を選び、プロンプトを与えて伝搬する(公式の SAM2Train)
+                    # 使える区間がない: 勾配が 0 の損失(重みにつなげて backward できる形にする。入力の和では勾配がつながらない)
+                    loss, parts = next(model.parameters()).sum() * 0, {}
+            elif cfg.arch in ("sam2", "sam3_vis"):  # 区間ごとに物体を選び、プロンプトを与えて伝搬する(公式の SAM2Train。SAM 3 型は
+                # 追跡の部分をこの手順で学習する。SAM 3 の論文の 4 段目)
                 from segmentation.instance_segmentation.lib_common.models.video.sam2.training import (sam2_loss, select_objects,
                                                                                                        train_forward)
-                loss, parts, n = 0.0, {}, 0
+                # micro-batch の区間の物体をまとめて 1 回で処理する(公式の batch と同じ。GPU の処理の起動の回数を区間の数で割る)。
+                # 損失は区間ごとに物体の数で割って平均したもの(物体ごとの重み = 1 /(区間の物体の数 × 区間の数))
                 images = batch["images"].cuda(non_blocking=True)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    for b, tg in enumerate(targets):
-                        obj = select_objects(tg["masks"], sam2_rng)
-                        if obj is None:  # 最初のフレームに物体がない区間は使わない
-                            continue
-                        gt = tg["masks"][obj.to(tg["masks"].device)].transpose(0, 1).bool()  # (N, T, S, S) -> (T, O, S, S)
-                        l, parts = sam2_loss(train_forward(model, images[b], gt, sam2_rng), gt)
-                        loss, n = loss + l, n + 1
-                loss = loss / max(n, 1) if n else images.sum() * 0
+                from segmentation.instance_segmentation.lib_common.models.video.sam2.training import MAX_OBJECTS
+                use, gts, clip_ids, reals = [], [], [], []
+                for b, tg in enumerate(targets):
+                    obj = select_objects(tg["masks"], sam2_rng)
+                    if obj is None:  # 最初のフレームに物体がない区間は使わない
+                        continue
+                    g = tg["masks"][obj.to(tg["masks"].device)].transpose(0, 1).bool()  # (N, T, S, S) -> (T, O, S, S)
+                    real = torch.ones(len(obj), dtype=torch.bool)
+                    if cfg.sam2_pad_objects and len(obj) < MAX_OBJECTS:  # 1 つ目の物体の複製で埋める(損失の重みは 0)
+                        g = torch.cat([g, g[:, :1].expand(-1, MAX_OBJECTS - len(obj), -1, -1)], 1)
+                        real = torch.cat([real, torch.zeros(MAX_OBJECTS - len(obj), dtype=torch.bool)])
+                    gts.append(g)
+                    clip_ids.append(torch.full((g.shape[1],), len(use), dtype=torch.long))
+                    reals.append(real)
+                    use.append(b)
+                if use:
+                    gt = torch.cat(gts, dim=1)  # (T, 全部の物体, S, S)
+                    obj_clip, real = torch.cat(clip_ids), torch.cat(reals)
+                    counts = torch.bincount(obj_clip[real]).float()  # 区間ごとの本物の物体の数
+                    weight = torch.where(real, 1.0 / (counts[obj_clip] * len(use)), torch.zeros(len(real)))
+                    with amp_autocast(cfg):
+                        outs = train_forward(model.sam2 if cfg.arch == "sam3_vis" else model, images[use], gt, sam2_rng, obj_clip)
+                        loss, parts = sam2_loss(outs, gt, weight)
+                else:  # 使える区間がない: 勾配が 0 の損失(重みにつなげて backward できる形にする。入力の和では勾配がつながらない)
+                    loss, parts = next(model.parameters()).sum() * 0, {}
             elif cfg.arch == "masktrack":  # 区間の 2 フレームの一方を今、もう一方を参照にする(損失はモデルの中で計算する)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with amp_autocast(cfg):
                     loss, parts = model.train_loss(batch["images"].cuda(non_blocking=True), targets, sam2_rng)
-            elif cfg.arch == "dvis_daq":  # 割り当てが追跡の部の中で順に決まるので、損失はモデルの中で計算する
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+            elif cfg.arch in ("dvis_daq", "gtr_track"):  # 割り当てがフレームの順に決まるので、損失はモデルの中で計算する
+                with amp_autocast(cfg):
                     loss, parts = model.train_loss(batch["images"].cuda(non_blocking=True), targets, step / total)
             else:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with amp_autocast(cfg):
                     outs, extra = model(batch["images"].cuda(non_blocking=True))
                 # DVIS: 学習の前半は、割り当てを固定した segmenter の予測(追跡の部の並びに並べ替えたもの)で決める(公式の DVIS_online)
                 guide = cfg.arch in ("dvis", "dvis_plus", "cavis") and step < total * cfg.dvis_guide_frac
@@ -439,16 +584,23 @@ def train_video(cfg: VideoTrainConfig) -> dict:
                 log.write(json.dumps(rec) + "\n"); log.flush()
                 print(rec, flush=True)
             if step % eval_every == 0 or step == total:
-                # SAM 2(マスクを与えて追う)は伝搬だけの出来を J&F で、ほかは動画の AP・画像 AP で測る
-                vos = cfg.arch in ("sam2", "deva")
-                evaluate = evaluate_vos_set if vos else evaluate_video_set
+                # SAM 2(マスクを与えて追う)・画像のモデルを与えない DEVA は伝搬だけの出来を J&F で、ほかは動画の AP・画像 AP で測る。
+                # DEVA に画像のモデル(segmenter)を与えたときは、画像のモデルと組み合わせた動画の AP で測って選び(ほかの方式と同じ)、
+                # 伝搬だけの出来(dev の J&F)も記録する
+                vos = cfg.arch in ("sam2", "deva") and not deva_vis
+                evaluate = _retry_oom(evaluate_vos_set if vos else evaluate_video_set)
                 keys = ("J&F", "J", "F") if vos else ("AP", "AP50", "AP75", "image_AP", "image_AP50", "image_AP75")
-                m = evaluate(model, cfg.dev_set, cfg, cfg.dev_n)
+                # 評価の前に今の重みを保存する(評価でメモリが足りずに止まっても、ここまでの学習を失わないように。評価で重みは変わらない)
+                torch.save(model.state_dict(), out_dir / "last.pt")
+                m = evaluate(eval_model, cfg.dev_set, cfg, cfg.dev_n)
                 history.append({"step": step, "epoch": round(step / steps_per_epoch, 2), **{k: m[k] for k in keys},
                                 "s_per_video": m["s_per_video"]})
+                if deva_vis:
+                    mv = _retry_oom(evaluate_vos_set)(model, cfg.dev_set, cfg, cfg.dev_n)
+                    history[-1].update({k: mv[k] for k in ("J&F", "J", "F")})
                 test_every = cfg.test_every_epochs * steps_per_epoch if cfg.epochs else cfg.eval_every
                 if cfg.test_set and (step % test_every == 0 or step == total):  # test の役のセット(記録だけ。選択には使わない)
-                    mt = evaluate(model, cfg.test_set, cfg)
+                    mt = evaluate(eval_model, cfg.test_set, cfg)
                     history[-1].update({f"test_{k}": mt[k] for k in keys})
                     if not vos:
                         history[-1]["test_image_per_class_AP"] = mt["image_per_class_AP"]
@@ -468,6 +620,9 @@ def train_video(cfg: VideoTrainConfig) -> dict:
     config = {k: os.path.relpath(v, REPO_ROOT) if isinstance(v, str) and v.startswith(str(REPO_ROOT)) else v
               for k, v in asdict(cfg).items()}
     result = {"name": cfg.name, "config": config, "history": history,
-              "eval": {s: (evaluate_vos_set if cfg.arch in ("sam2", "deva") else evaluate_video_set)(model, s, cfg) for s in cfg.eval_sets}}
+              "eval": {s: _retry_oom(evaluate_vos_set if cfg.arch in ("sam2", "deva") and not deva_vis else evaluate_video_set)(eval_model, s, cfg)
+                       for s in cfg.eval_sets}}
+    if deva_vis:  # 伝搬だけの出来(J&F)も、最後の評価のセットで残す
+        result["eval_vos"] = {s: _retry_oom(evaluate_vos_set)(model, s, cfg) for s in cfg.eval_sets}
     save_metrics(res_dir / f"{cfg.name}.json", result)
     return result

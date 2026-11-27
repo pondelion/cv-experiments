@@ -20,7 +20,7 @@ import torch  # noqa: E402
 from segmentation.instance_segmentation.lib_common.models.video.image_adapter import (ImageSegmenter,  # noqa: E402
                                                                                       reorder_classes, video_class_order)
 from segmentation.instance_segmentation.lib_common.models.video.minvis import MinVIS  # noqa: E402
-from segmentation.instance_segmentation.lib_common.train import TrainConfig, build_model  # noqa: E402
+from segmentation.instance_segmentation.lib_common.train import TrainConfig, amp_autocast, build_model  # noqa: E402
 from segmentation.instance_segmentation.lib_common.video_data import VideoEvalDataset, load_video_set  # noqa: E402
 from segmentation.instance_segmentation.lib_common.video_infer import video_predictions  # noqa: E402
 from segmentation.instance_segmentation.lib_common.video_samples import render_video_compare  # noqa: E402
@@ -67,7 +67,7 @@ def main() -> None:
     out_dir = common.RESULTS_DIR / "samples" / a.run / a.set
     for vid in chosen:
         item = ds[index[vid]]
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.no_grad(), amp_autocast(cfg):
             logits, masks = model.predict_video(item["images"].cuda())
         preds = video_predictions(logits, masks, vid, list(names), cfg.size, item["valid_size"], item["orig_size"], cfg.top_k)
         video = ds.videos[index[vid]]

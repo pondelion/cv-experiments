@@ -234,6 +234,25 @@ class SAM2(nn.Module):
         b, c, h, w = feat.shape
         if is_init_cond:  # 公式の directly_add_no_mem_embed
             return (feat.flatten(2).transpose(1, 2) + self.no_mem_embed).transpose(1, 2).reshape(b, c, h, w)
+        memory, memory_pos, n_ptr_tokens = self._gather_memory(t, out_dict, num_frames, b, c, feat.device)
+        curr, curr_pos = feat.flatten(2).transpose(1, 2), pos.flatten(2).transpose(1, 2)
+        out = self.memory_attention(curr, memory, curr_pos, memory_pos, n_ptr_tokens)
+        return out.transpose(1, 2).reshape(b, c, h, w)
+
+    def _gather_memory(self, t: int, out_dict: dict, num_frames: int, b: int, c: int, device):
+        """記憶の注意に入れる記憶のトークンと位置の埋め込みを、過去の出力から並べる(_memory_conditioned の前半)。
+
+        Args:
+            t: 今の時刻。
+            out_dict: 過去の出力 {"cond": {t: 出力}, "non_cond": {t: 出力}}。
+            num_frames: 動画(区間)のフレームの数。
+            b: 物体の数(out_dict の出力の batch の大きさ)。
+            c: 画像の特徴の次元。
+            device: 置く装置。
+
+        Returns:
+            (記憶 (B, L, M), 位置の埋め込み (B, L, M), 物体のポインタのトークンの数)。
+        """
         mems, mem_pos = [], []
         cond, uncond = select_closest_cond_frames(t, out_dict["cond"], self.max_cond_frames_in_attn)
         t_prevs = [(0, o) for o in cond.values()]
@@ -245,8 +264,16 @@ class SAM2(nn.Module):
         for t_pos, o in t_prevs:
             if o is None:
                 continue
-            mems.append(o["maskmem_features"].flatten(2).transpose(1, 2))  # (B, H·W, M)
-            mem_pos.append(o["maskmem_pos_enc"].flatten(2).transpose(1, 2) + self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1, 0])
+            if not torch.is_grad_enabled():  # 推論: 並べ直した記憶のトークンを最初に作ったときにとっておき、毎フレーム並べ直さない
+                if "_mem_tok" not in o:
+                    o["_mem_tok"] = o["maskmem_features"].flatten(2).transpose(1, 2)
+                    o["_mem_pos_tok"] = o["maskmem_pos_enc"].flatten(2).transpose(1, 2)
+                tok, ptok = o["_mem_tok"], o["_mem_pos_tok"]
+            else:
+                tok = o["maskmem_features"].flatten(2).transpose(1, 2)  # (B, H·W, M)
+                ptok = o["maskmem_pos_enc"].flatten(2).transpose(1, 2)
+            mems.append(tok)
+            mem_pos.append(ptok + self.maskmem_tpos_enc[self.num_maskmem - t_pos - 1, 0])
         # 物体のポインタ(過去の最大 16 フレーム。推論は条件のフレームも過去のものだけ)
         max_ptrs = min(num_frames, self.max_obj_ptrs_in_encoder)
         ptr_cond = cond if self.training else {s: o for s, o in cond.items() if s <= t}
@@ -262,17 +289,68 @@ class SAM2(nn.Module):
         if pos_ptrs:
             tpos, ptrs = zip(*pos_ptrs)
             ptrs = torch.stack(ptrs)  # (P, B, C)
-            tp = get_1d_sine_pe(torch.tensor(tpos, device=feat.device, dtype=torch.float32) / max(max_ptrs - 1, 1), c)
-            tp = self.obj_ptr_tpos_proj(tp)[:, None].expand(-1, b, -1)  # (P, B, M)
+            if not torch.is_grad_enabled():  # 推論: 時刻の差の並びごとに決まる値なので、並びごとにとっておいて使い回す
+                key = (tuple(tpos), max_ptrs, c, str(device))
+                cache = self.__dict__.setdefault("_tp_cache", {})
+                if key not in cache:
+                    cache[key] = self.obj_ptr_tpos_proj(
+                        get_1d_sine_pe(torch.tensor(tpos, device=device, dtype=torch.float32) / max(max_ptrs - 1, 1), c))
+                tp = cache[key]
+            else:
+                tp = self.obj_ptr_tpos_proj(
+                    get_1d_sine_pe(torch.tensor(tpos, device=device, dtype=torch.float32) / max(max_ptrs - 1, 1), c))
+            tp = tp[:, None].expand(-1, b, -1)  # (P, B, M)
             # 256 次元のポインタを 64 次元の 4 トークンに分ける(公式と同じ並べ方)
             ptrs = ptrs.reshape(-1, b, c // self.mem_dim, self.mem_dim).permute(0, 2, 1, 3).flatten(0, 1)  # (P·4, B, M)
             tp = tp.repeat_interleave(c // self.mem_dim, dim=0)
             mems.append(ptrs.transpose(0, 1)); mem_pos.append(tp.transpose(0, 1))
             n_ptr_tokens = ptrs.shape[0]
-        memory, memory_pos = torch.cat(mems, dim=1), torch.cat(mem_pos, dim=1)
-        curr, curr_pos = feat.flatten(2).transpose(1, 2), pos.flatten(2).transpose(1, 2)
-        out = self.memory_attention(curr, memory, curr_pos, memory_pos, n_ptr_tokens)
-        return out.transpose(1, 2).reshape(b, c, h, w)
+        return torch.cat(mems, dim=1), torch.cat(mem_pos, dim=1), n_ptr_tokens
+
+    @torch.no_grad()
+    def propagate_batched(self, t: int, feats: list[torch.Tensor], pos: list[torch.Tensor], out_dicts: list[dict],
+                          num_frames: int) -> list[dict]:
+        """プロンプトなしの伝搬(track_step(t, False, …, run_mem=False) と同じ計算)を、複数の物体(追跡)でまとめて行う(推論)。
+
+        物体ごとの記憶は独立なので、記憶のトークンの数とポインタのトークンの数が同じ物体をまとめ、記憶の注意とマスクの decoder を
+        1 回で通す(位置の埋め込みは物体ごとの値のまま)。結果は物体ごとに分けて返す。
+
+        Args:
+            t: 今の時刻。
+            feats: 今のフレームの [stride 4, 8, 16] の特徴(batch 1)。
+            pos: 同じ段の位置の埋め込み(batch 1)。
+            out_dicts: 物体ごとの過去の出力(どれも batch 1)。
+            num_frames: 動画のフレームの数。
+
+        Returns:
+            物体ごとの track_step の返り値(batch 1)。
+        """
+        c = feats[-1].shape[1]
+        gathered = [self._gather_memory(t, od, num_frames, 1, c, feats[-1].device) for od in out_dicts]
+        groups: dict[tuple, list[int]] = {}
+        for i, (mem, _, n_ptr) in enumerate(gathered):
+            groups.setdefault((mem.shape[1], n_ptr), []).append(i)
+        res: list[dict | None] = [None] * len(out_dicts)
+        multimask = self._use_multimask(False, None)
+        for (_, n_ptr), idx in groups.items():
+            n = len(idx)
+            memory = torch.cat([gathered[i][0] for i in idx])
+            memory_pos = torch.cat([gathered[i][1] for i in idx])
+            feat = feats[-1].expand(n, -1, -1, -1)
+            b, _, h, w = feat.shape
+            curr = feat.flatten(2).transpose(1, 2)
+            curr_pos = pos[-1].expand(n, -1, -1, -1).flatten(2).transpose(1, 2)
+            pix = self.memory_attention(curr, memory, curr_pos, memory_pos, n_ptr).transpose(1, 2).reshape(b, c, h, w)
+            high_res = [f.expand(n, -1, -1, -1) for f in feats[:-1]]
+            outs = self._sam_heads(pix, None, None, high_res, multimask)
+            low, high, ptr, obj = outs[3], outs[4], outs[5], outs[6]
+            if self.fill_hole_area > 0:
+                low = fill_holes(low, self.fill_hole_area)
+                high = F.interpolate(low, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
+            for j, i in enumerate(idx):
+                res[i] = {"pred_masks": low[j: j + 1], "pred_masks_high_res": high[j: j + 1], "obj_ptr": ptr[j: j + 1],
+                          "object_score_logits": obj[j: j + 1], "point_inputs": None}
+        return res
 
     def _encode_memory(self, feat, high_res_masks, obj_logits, from_pts: bool):
         """予測のマスクから記憶を作る(公式の _encode_new_memory)。

@@ -96,7 +96,7 @@ class ReferringTracker(nn.Module):
 
     Args:
         num_classes: クラスの数(物体なしを含めない)。
-        d: クエリの次元(segmenter と同じ 256)。
+        d: クエリの次元(segmenter のクエリの次元と同じにする。公式は Mask2Former の HIDDEN_DIM = 256)。
         layers: 層の数(公式は 6)。
     """
 
@@ -188,14 +188,17 @@ class DVISOnline(nn.Module):
 
     Args:
         segmenter: 学習済みの画像のモデル(重みを固定する)。公式は Mask2Former。GTR 系も ImageSegmenter で包めば使える(追跡の部は
-            segmenter のクエリの埋め込み(GTR: 最後の層の出力のクエリ)とマスクを作る特徴を使い、次元はどちらも 256 であること)。
+            segmenter のクエリの埋め込み(GTR: 最後の層の出力のクエリ)とマスクを作る特徴を使い、次元はどちらも dim であること)。
             GTR 系はクラスが sigmoid なので、学習の前半の割り当てのクラスの費用は −sigmoid の確率(match_cost の activation)。
         num_classes: クラスの数。
         tracker_layers: 追跡の部の層の数(公式は 6)。
         tracker: 追跡の部(None なら ReferringTracker。DVIS++ は ReferringTrackerPlus、CAVIS は CAVISTracker を渡す)。
+        dim: segmenter のクエリとマスクを作る特徴の次元(追跡の部の次元にする。公式と同じく segmenter の次元に合わせる。
+            Mask2Former は 256、GTR 系は学習の設定の dim)。
     """
 
-    def __init__(self, segmenter: nn.Module, num_classes: int, tracker_layers: int = 6, tracker: nn.Module | None = None):
+    def __init__(self, segmenter: nn.Module, num_classes: int, tracker_layers: int = 6, tracker: nn.Module | None = None,
+                 dim: int = 256):
         super().__init__()
         from segmentation.instance_segmentation.lib_common.models.video.image_adapter import as_segmenter
         # segmenter: Mask2Former(そのまま)か、GTR 系などを image_adapter.ImageSegmenter で包んだもの(同じ形の出力にそろえる)
@@ -203,7 +206,7 @@ class DVISOnline(nn.Module):
         for p in self.segmenter.parameters():
             p.requires_grad_(False)
         # 追跡の部(DVIS++ は dvis_plus.py の ReferringTrackerPlus を渡す。step(frame, state, last_only) の呼び方は同じ)
-        self.tracker = tracker if tracker is not None else ReferringTracker(num_classes, layers=tracker_layers)
+        self.tracker = tracker if tracker is not None else ReferringTracker(num_classes, d=dim, layers=tracker_layers)
 
     def train(self, mode: bool = True):
         """学習の状態を切り替える(segmenter は学習中も eval のまま。公式と同じく BatchNorm・dropout を学習の動きにしない)。

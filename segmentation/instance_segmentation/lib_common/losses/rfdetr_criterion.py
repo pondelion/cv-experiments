@@ -14,6 +14,7 @@
 形の記号: B = 画像の数、M = 1 つの出力のクエリの数(学習では G·Q)、K = クラスの数、T = 正解の物体の数(全部の画像の分を
 つなげた数)、P = 点の数、mh・mw = マスクの縦・横、S = 入力の一辺、A = 割り当てた組の数
 """
+import numpy as np
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
@@ -149,7 +150,7 @@ def full_mask_cost(parts: dict, i: int, target: torch.Tensor, alpha: float = 0.2
 @torch.no_grad()
 def match(out: dict, tg: dict, groups: int,
           weights: tuple[float, float, float, float, float] = (W_CLASS_COST, W_BBOX, W_GIOU, W_MASK_CE, W_DICE),
-          mask_cost: str = "points") -> list[tuple[torch.Tensor, torch.Tensor]]:
+          mask_cost: str = "points", exclude: list | None = None) -> list[tuple[torch.Tensor, torch.Tensor]]:
     """1 つの出力の割り当て(全部の画像・組の費用をまとめて計算し、CPU へは 1 回だけ移す)。
 
     Args:
@@ -160,6 +161,9 @@ def match(out: dict, tg: dict, groups: int,
         weights: 費用の重み(クラス, 枠 L1, GIoU, マスク BCE(mask_cost="full_focal" では focal の形), Dice)。既定は RF-DETR の値。
         mask_cost: マスクの費用の計算。"points"(既定。画像ごとに選んだ点の BCE と Dice。RF-DETR・GTR と同じ)/
             "full_focal"(D-FINE-seg と同じ。全部の画素の focal の形の費用と Dice。正解のマスクは予測の大きさに双線形で縮める)。
+        exclude: 画像ごとの、割り当てに使わないクエリの番号 (·,)(M の中の番号)。None なら全部使う。動画の GTR 系
+            (models/video/gtr_track.py)で、前のフレームで物体を割り当てたクエリを除くため(公式の VidEoMT と同じく、
+            費用を 1e6 にして除く)。
 
     Returns:
         画像ごとの (クエリの番号 (A_i,), 画像の中での正解の番号 (A_i,))。組ごとに割り当てた結果をつなげたもの。
@@ -206,6 +210,9 @@ def match(out: dict, tg: dict, groups: int,
         cost_dice = 1 - (2 * torch.einsum("bmp,tp->bmt", p, tm) + 1) / (p.sum(-1, keepdim=True) + tm.sum(-1) + 1)
         cost = cost + w_ce * cost_ce + w_dice * cost_dice
     cost = cost.nan_to_num(1.0).cpu().numpy()  # (B, M, T)。公式と同じく NaN は 1 にする
+    if exclude is not None:
+        for i, ex in enumerate(exclude):
+            cost[i, np.asarray(ex, dtype=np.int64)] = 1e6
     owner = tg["owner"].cpu().numpy()
     q = m // groups
     result = []

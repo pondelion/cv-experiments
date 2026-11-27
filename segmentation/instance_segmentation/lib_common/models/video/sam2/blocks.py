@@ -207,15 +207,20 @@ def apply_rope(x: torch.Tensor, freqs: torch.Tensor, repeat: int = 1) -> torch.T
 
     Args:
         x: (B, h, N, d)。
-        freqs: 回転 (N / repeat, d / 2) の複素数。
+        freqs: 回転の (cos, sin)、どちらも (N / repeat, d / 2)(axial_rope の複素数の実部と虚部)。
         repeat: 同じ格子が並んだ回数(記憶のフレームのキーは、同じ格子が repeat 回並ぶ)。
 
     Returns:
         (B, h, N, d)。
     """
-    xc = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    f = freqs.repeat(repeat, 1) if repeat > 1 else freqs
-    return torch.view_as_real(xc * f.to(xc.device)).flatten(3).type_as(x)
+    # 複素数の掛け算 (x0 + i x1)(cos + i sin) を、同じ式の実数の計算で行う(torch.compile が複素数で切れないように):
+    # (x0 cos − x1 sin, x0 sin + x1 cos)。freqs は (cos, sin) の実数の組
+    cos, sin = freqs
+    if repeat > 1:
+        cos, sin = cos.repeat(repeat, 1), sin.repeat(repeat, 1)  # (N, d / 2)
+    xr = x.float().reshape(*x.shape[:-1], -1, 2)  # (B, h, N, d / 2, 2)
+    x0, x1 = xr[..., 0], xr[..., 1]
+    return torch.stack([x0 * cos - x1 * sin, x0 * sin + x1 * cos], dim=-1).flatten(3).type_as(x)
 
 
 class Attention(nn.Module):
@@ -306,9 +311,10 @@ class RoPEAttention(Attention):
         """
         q, k, v = self._heads(self.q_proj(q)), self._heads(self.k_proj(k)), self._heads(self.v_proj(v))
         side = int(math.sqrt(q.shape[-2]))  # 問いは正方形の格子(公式と同じ前提)
-        key = (side, q.shape[-1])
-        if key not in self._cache:
-            self._cache[key] = axial_rope(q.shape[-1], side, side, self.theta)
+        key = (side, q.shape[-1], q.device)
+        if key not in self._cache:  # GPU の上に置いて使い回す(呼ぶたびに CPU で並べて GPU へ送らない)。実数の (cos, sin) の組
+            f = axial_rope(q.shape[-1], side, side, self.theta)
+            self._cache[key] = (f.real.contiguous().to(q.device), f.imag.contiguous().to(q.device))
         freqs = self._cache[key]
         n_rope = k.shape[-2] - num_k_exclude_rope
         if q.shape[-2] != n_rope:

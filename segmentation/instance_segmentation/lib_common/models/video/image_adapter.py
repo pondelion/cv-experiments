@@ -35,11 +35,15 @@ def video_class_order(train_json: str, video_set: str) -> list[int]:
     Returns:
         order(長さ K): 動画のセットの k 番目のクラス = 画像のモデルの order[k] 番目のクラス。
 
+    COCO の 8 クラスの名前(bottle・chair・tv)は、VIPSeg の 8 クラスのセットを作ったときの対応
+    (exp00501 の make_sets_cls8.py: bottle → bottle_or_cup、chair → chair_or_seat、tv → screen_or_television)で読み替える。
+
     Raises:
-        ValueError: クラスの名前の集まりが一致しないとき(COCO の名前のセットなど。対応を推測しない)。
+        ValueError: 読み替えた後もクラスの名前の集まりが一致しないとき(対応を推測しない)。
     """
     from segmentation.instance_segmentation.lib_common.video_data import load_video_set
-    image = [c["name"] for c in json.loads(Path(train_json).read_text())["categories"]]
+    alias = {"bottle": "bottle_or_cup", "chair": "chair_or_seat", "tv": "screen_or_television"}  # make_sets_cls8.py の対応
+    image = [alias.get(c["name"], c["name"]) for c in json.loads(Path(train_json).read_text())["categories"]]
     video = [c["name"] for c in load_video_set(video_set)["categories"]]
     if sorted(image) != sorted(video):
         raise ValueError(f"画像のモデルのクラス {image} と動画のセットのクラス {video} の名前が一致しない")

@@ -31,20 +31,35 @@ WEIGHTS = {"mask": 20.0, "dice": 1.0, "iou": 1.0, "class": 1.0}
 NUM_FRAMES, MAX_OBJECTS = 8, 3
 
 
-def train_forward(model: SAM2, frames: torch.Tensor, gt: torch.Tensor, rng: np.random.Generator) -> list[dict]:
-    """1 本の区間の学習の forward(公式の SAM2Train.forward)。
+def train_forward(model: SAM2, frames: torch.Tensor, gt: torch.Tensor, rng: np.random.Generator,
+                  obj_clip: torch.Tensor | None = None) -> list[dict]:
+    """区間の学習の forward(公式の SAM2Train.forward)。複数の区間の物体をまとめて 1 回で処理できる。
+
+    まとめるとき(公式の batch と同じ扱い): 全部の区間の物体を物体の向きに並べ、各物体は自分の区間のフレームの特徴を使う
+    (公式の flat_obj_to_img_idx)。プロンプトの種類・条件のフレーム・修正の点を足すフレームは、公式の prepare_prompt_inputs と同じく
+    1 回だけ選んで全部の物体で共有する。
 
     Args:
         model: SAM2(train のまま)。
-        frames: (T, 3, S, S)。
-        gt: 選んだ物体の正解のマスク (T, O, S, S) の bool。
+        frames: (T, 3, S, S)(区間 1 本)か (B, T, 3, S, S)(B 本をまとめる)。
+        gt: 選んだ物体の正解のマスク (T, O, S, S) の bool(まとめるときは全部の区間の物体を並べたもの)。
         rng: 乱数(プロンプトの選び方)。
+        obj_clip: 物体ごとの区間の番号 (O,)(まとめるとき)。None なら区間 1 本。
 
     Returns:
         フレームごとの出力(track_step の返り値)。
     """
     t_all, n_obj = gt.shape[:2]
-    fpn, pos = model.forward_image(frames)
+    if frames.dim() == 4:
+        frames = frames[None]
+    # 画像の encoder は区間ごとに通す(backbone の BatchNorm が学習中は batch の統計を使うので、区間 1 本ずつのときと同じ統計にする)。
+    # 並びは (区間, フレーム) の順 (B·T, ·, ·, ·)
+    per_clip = [model.forward_image(f) for f in frames]
+    fpn = [torch.cat([c[0][lv] for c in per_clip]) for lv in range(len(per_clip[0][0]))]
+    pos = [torch.cat([c[1][lv] for c in per_clip]) for lv in range(len(per_clip[0][1]))]
+    if obj_clip is None:
+        obj_clip = torch.zeros(n_obj, dtype=torch.long, device=gt.device)
+    obj_clip = obj_clip.to(gt.device)
     use_pt = rng.random() < PROB_PT
     n_init = int(rng.integers(1, NUM_INIT_COND, endpoint=True)) if NUM_INIT_COND > 1 else 1  # rand_init_cond_frames
     n_correct = NUM_FRAMES_TO_CORRECT
@@ -71,8 +86,9 @@ def train_forward(model: SAM2, frames: torch.Tensor, gt: torch.Tensor, rng: np.r
         to_correct = init + rng.choice(rest, n_correct - n_init, replace=False).tolist()
     out_dict, outs = {"cond": {}, "non_cond": {}}, {}
     for t in init + rest:
-        feats = [f[t: t + 1].expand(n_obj, -1, -1, -1) for f in fpn]  # 物体ごとに同じフレームの特徴
-        ps = [p[t: t + 1].expand(n_obj, -1, -1, -1) for p in pos]
+        img = obj_clip * t_all + t  # (O,) 物体ごとに、自分の区間のこのフレームの特徴の番号(公式の flat_obj_to_img_idx)
+        feats = [f[img] for f in fpn]
+        ps = [p[img] for p in pos]
         cur = model.track_step(t, t in init, feats, ps, points_in.get(t), masks_in.get(t), out_dict, t_all,
                                gt_masks=gt[t][:, None], correct=t in to_correct, rng=rng, prob_gt_pt=PROB_GT_PT)
         (out_dict["cond"] if (t in init or t in to_correct) else out_dict["non_cond"])[t] = cur
@@ -100,17 +116,21 @@ def _focal(x, y, alpha: float, gamma: float):
     return loss
 
 
-def sam2_loss(outs: list[dict], gt: torch.Tensor) -> tuple[torch.Tensor, dict]:
+def sam2_loss(outs: list[dict], gt: torch.Tensor, obj_weight: torch.Tensor | None = None) -> tuple[torch.Tensor, dict]:
     """SAM 2 の損失(公式の MultiStepMultiMasksAndIous。ファイルの先頭に書いた損失)。
 
     Args:
         outs: train_forward の返り値(フレームごとの出力)。
         gt: 正解のマスク (T, O, S, S)。
+        obj_weight: 物体ごとの重み (O,)。None なら 1 / O(区間 1 本の公式の割り方)。区間をまとめたときは
+            1 /(その物体の区間の物体の数 × 区間の数)にすると、区間ごとの損失の平均と同じ値になる。
 
     Returns:
         (損失の合計, 内訳 {"mask", "dice", "iou", "class"})。
     """
     n_obj = max(gt.shape[1], 1)
+    w = torch.full((gt.shape[1],), 1.0 / n_obj, device=gt.device) if obj_weight is None else obj_weight.to(gt.device)
+    w = w[:, None]  # (O, 1) 物体ごとの割る数の代わり
     sums = {"mask": 0.0, "dice": 0.0, "iou": 0.0, "class": 0.0}
     for o, g in zip(outs, gt):
         target = g[:, None].float()  # (O, 1, S, S)
@@ -118,14 +138,14 @@ def sam2_loss(outs: list[dict], gt: torch.Tensor) -> tuple[torch.Tensor, dict]:
         for masks, ious, obj in zip(o["multistep_pred_multimasks_high_res"], o["multistep_pred_ious"],
                                     o["multistep_object_score_logits"]):
             tgt = target.expand_as(masks)
-            l_mask = _focal(masks, tgt, 0.25, 2.0).flatten(2).mean(-1) / n_obj  # (O, M)
+            l_mask = _focal(masks, tgt, 0.25, 2.0).flatten(2).mean(-1) * w  # (O, M)
             pr = masks.flatten(2).sigmoid()
             tg = tgt.flatten(2)
-            l_dice = (1 - (2 * (pr * tg).sum(-1) + 1) / (pr.sum(-1) + tg.sum(-1) + 1)) / n_obj  # (O, M)
+            l_dice = (1 - (2 * (pr * tg).sum(-1) + 1) / (pr.sum(-1) + tg.sum(-1) + 1)) * w  # (O, M)
             pm, gm = masks.flatten(2) > 0, tg > 0
             actual = (pm & gm).sum(-1).float() / torch.clamp((pm | gm).sum(-1).float(), min=1.0)
-            l_iou = F.l1_loss(ious.float(), actual, reduction="none") / n_obj  # (O, M)
-            l_class = _focal(obj.float(), present, -1.0, 0.0).mean(1).sum() / n_obj
+            l_iou = F.l1_loss(ious.float(), actual, reduction="none") * w  # (O, M)
+            l_class = (_focal(obj.float(), present, -1.0, 0.0).mean(1) * w[:, 0]).sum()
             if l_mask.shape[1] > 1:
                 best = (l_mask * WEIGHTS["mask"] + l_dice * WEIGHTS["dice"]).argmin(-1)
                 ar = torch.arange(len(best), device=best.device)

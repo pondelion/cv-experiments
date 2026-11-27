@@ -151,7 +151,7 @@ class VidEoMT(nn.Module):
             prev: 前のフレームから渡すクエリ (B, Q, C)。動画の最初のフレームでは None。
 
         Returns:
-            (予測の並び [(クラスの値 (B, Q, K+1), マスクの値 (B, Q, 4h, 4w))]。学習のときは後半の各層の前の予測と最後の層の予測、
+            (予測の並び [(クラスの値 (B, Q, K+1), マスクの値 (B, Q, 4h, 4w))]。学習のときは後半の層の前の予測(最後の層の前を除く L2 − 1 個。公式の損失と同じ)と最後の層の予測、
             推論のときは最後の層の予測だけ,
              次のフレームに渡すクエリ (B, Q, C))。
         """
@@ -164,9 +164,12 @@ class VidEoMT(nn.Module):
         # norm_queries(公式の NORM_QUERIES。VIPSeg の DINOv3 の設定は True): 補助の予測と次のフレームへ渡すクエリに、
         # ViT の最後の LayerNorm をかける(False なら LayerNorm の前の値を使う)
         norm = self.vit.norm if self.norm_queries else (lambda y: y)
-        for block in self.vit.blocks[len(self.vit.blocks) - self.num_blocks:]:
-            if self.training:
-                preds.append(self._predict(norm(x), hw))  # 補助の損失のための、層の前の予測
+        for j, block in enumerate(self.vit.blocks[len(self.vit.blocks) - self.num_blocks:]):
+            # 補助の損失のための、層の前の予測。公式は L2 個の層それぞれの前で予測を作るが、損失の重みの表(weight_dict)に補助の
+            # 損失が L2 − 1 個(_0 … _{L2-2})しかなく、最後の層の前の予測(_{L2-1})は損失から外れる(公式の videomt.py の
+            # aux_weight_dict)。損失に入らない予測は作らない(勾配は同じ)
+            if self.training and j < self.num_blocks - 1:
+                preds.append(self._predict(norm(x), hw))
             x = block(x, rope=rope) if rope is not None else block(x)
         preds.append(self._predict(self.vit.norm(x), hw))
         return preds, norm(x)[:, : self.num_queries]  # 次のフレームへは、最後の層の出力のクエリを渡す(公式と同じ)
@@ -183,7 +186,7 @@ class VidEoMT(nn.Module):
             prev: 区間の最初のフレームに渡すクエリ (B, Q, C)。動画の最初から始めるときは None。
 
         Returns:
-            (予測の並び(step の予測の並びと同じ順。学習は後半の各層の前と最後の層、推論は最後の層だけ)。各要素は
+            (予測の並び(step の予測の並びと同じ順。学習は後半の層の前(最後の層の前を除く)と最後の層、推論は最後の層だけ)。各要素は
             {"logits": クラスの値 (B, T, Q, K+1), "masks": マスクの値 (B, Q, T, 4h, 4w)},
              区間の最後のフレームの、次に渡すクエリ (B, Q, C))。
         """

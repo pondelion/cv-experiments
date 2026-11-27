@@ -278,7 +278,7 @@ class DecoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
 
     def forward(self, tgt: torch.Tensor, ref: torch.Tensor, values: list[torch.Tensor], pos: torch.Tensor,
-                num_dn: int, dn_mask: torch.Tensor | None) -> torch.Tensor:
+                num_dn: int, dn_mask: torch.Tensor | None, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
         """1 層を通す。
 
         Args:
@@ -288,6 +288,8 @@ class DecoderLayer(nn.Module):
             pos: クエリの位置の埋め込み (B, M, C)。
             num_dn: denoising のクエリの数 D。
             dn_mask: denoising のクエリどうしの注意の禁止 (D, D)(True = 見ない)。
+            pad_mask: 1 組の検出のクエリ(動画の版では追跡のクエリ + 検出のクエリ)のうち、埋めたクエリ (B, M / G) の bool
+                (True = ほかのクエリから見ない)。動画の版で区間をまとめるとき、区間ごとに違う追跡のクエリの数をそろえるために使う。
 
         Returns:
             (B, M, C)。
@@ -302,11 +304,12 @@ class DecoderLayer(nn.Module):
                 outs.append(self.self_attn(q[:, :num_dn], q[:, :num_dn], tgt[:, :num_dn], attn_mask=dn_mask,
                                            need_weights=nw)[0])
             det = lambda x: rearrange(x[:, num_dn:], "b (g q) c -> (g b) q c", g=g)  # 組を画像の向きに並べる
-            o = self.self_attn(det(q), det(q), det(tgt), need_weights=nw)[0]
+            kpm = pad_mask.repeat(g, 1) if pad_mask is not None else None  # (G·B, M / G)。(g b) の並びに合わせる
+            o = self.self_attn(det(q), det(q), det(tgt), key_padding_mask=kpm, need_weights=nw)[0]
             outs.append(rearrange(o, "(g b) q c -> b (g q) c", g=g))
             sa = torch.cat(outs, dim=1)
         else:
-            sa = self.self_attn(q, q, tgt, need_weights=nw)[0]
+            sa = self.self_attn(q, q, tgt, key_padding_mask=pad_mask, need_weights=nw)[0]
         tgt = self.norm1(tgt + sa)
         tgt = self.gateway(tgt, self.cross_attn(tgt + pos, ref, values))
         return self.norm2((tgt + self.ffn(tgt)).clamp(-65504, 65504))
@@ -525,12 +528,34 @@ class GTRSeg(nn.Module):
         prob = rearrange(corners, "... (four r) -> ... four r", four=4).softmax(-1)
         return prob @ self.project.to(prob.dtype)
 
-    def forward(self, images: torch.Tensor, targets: dict | None = None) -> dict:
+    def encode(self, images: torch.Tensor) -> list[torch.Tensor]:
+        """backbone と encoder だけを通す(動画の版で、区間のフレームをまとめて通すため。forward の最初の部分と同じ計算)。
+
+        Args:
+            images: (B, 3, S, S)。
+
+        Returns:
+            段ごとの特徴 3 × (B, C, h_l, w_l)。
+        """
+        x = images * self.renorm_scale + self.renorm_shift if self.renorm else images  # 正規化が違う backbone だけ直す
+        return self.encoder(self.backbone(x), tuple(images.shape[-2:]))
+
+    def forward(self, images: torch.Tensor, targets: dict | None = None,
+                track: tuple | None = None, feats: list[torch.Tensor] | None = None,
+                queries: tuple | None = None) -> dict:
         """予測する。
 
         Args:
             images: (B, 3, S, S)。
             targets: 学習のとき、denoising のための正解({"labels", "boxes" (cx, cy, w, h、0〜1), "counts"})。
+            track: 動画の版(models/video/gtr_track.py)で、前のフレームから引き継ぐ追跡のクエリ
+                (内容 (B, K, C), 参照の枠のロジット (B, K, 4))。各組の検出のクエリの前につなげる(組ごとに同じものを複製するので、
+                1 組のクエリは K + Q 個)。None なら画像のモデルと同じ(K = 0)。3 つ目の要素に埋めた追跡のクエリ (B, K) の bool を
+                渡すと、そのクエリをほかのクエリの自己注意で見ない(区間をまとめるとき、区間ごとに違う K をそろえるため)。
+            feats: encode で先に作った、この画像の段ごとの特徴(あれば backbone と encoder を通さない)。
+            queries: 動画の版(models/video/gtr_track.py)で、decoder に入れる全部のクエリ
+                (内容 (B, G·Q, C), 参照の枠のロジット (B, G·Q, 4))。あれば encoder の上位から選んだクエリの代わりに使う
+                (encoder の上位の予測 "enc" は損失のためにそのまま作る)。
 
         Returns:
             {"layers": 層ごとの {"logits": (B, G·Q, K), "boxes": (B, G·Q, 4), "corners": (B, G·Q, 4·R),
@@ -541,8 +566,8 @@ class GTRSeg(nn.Module):
         """
         b = images.shape[0]
         image_size = tuple(images.shape[-2:])
-        x = images * self.renorm_scale + self.renorm_shift if self.renorm else images  # 正規化が違う backbone だけ直す
-        feats = self.encoder(self.backbone(x), image_size)  # 3 × (B, C, h_l, w_l)
+        if feats is None:
+            feats = self.encode(images)  # 3 × (B, C, h_l, w_l)
         shapes = [tuple(f.shape[-2:]) for f in feats]
         memory = torch.cat([rearrange(f, "b c h w -> b (h w) c") for f in feats], dim=1)  # (B, N, C)
         anchors, valid = self._anchors(shapes, images.device)
@@ -557,9 +582,19 @@ class GTRSeg(nn.Module):
             box_unact = self.enc_bbox_head[i](mem) + pick(anchors.expand(b, -1, -1))  # (B, Q, 4)
             enc_logits.append(pick(logits))
             enc_boxes.append(box_unact.sigmoid())
-            contents.append(mem.detach())
-            refs.append(box_unact.detach())
+            if track is None:
+                contents.append(mem.detach())
+                refs.append(box_unact.detach())
+            else:  # 組の先頭に追跡のクエリ K 個をつなげる: (B, K + Q, C), (B, K + Q, 4)
+                contents.append(torch.cat([track[0], mem.detach()], 1))
+                refs.append(torch.cat([track[1], box_unact.detach()], 1))
         tgt, ref_unact = torch.cat(contents, 1), torch.cat(refs, 1)  # (B, G·Q, C), (B, G·Q, 4)
+        if queries is not None:  # 動画の版: 全部のクエリを、前のフレームから引き継いだものにする
+            tgt, ref_unact = queries
+        content = tgt  # decoder に入れたクエリの内容 (B, G·Q, C)(動画の版が最初のフレームの分を覚えておく)
+        pad_mask = None  # 1 組の中の埋めた追跡のクエリ (B, K + Q)(track に 3 つ目の要素があるとき)
+        if track is not None and len(track) > 2 and track[2] is not None:
+            pad_mask = torch.cat([track[2], torch.zeros(b, self.num_queries, dtype=torch.bool, device=tgt.device)], 1)
         dn = denoising_queries(targets, self.num_classes, self.denoising_class_embed, g, self.num_dn) \
             if self.training and targets is not None and self.num_dn > 0 else None
         num_dn, dn_mask = 0, None
@@ -571,7 +606,7 @@ class GTRSeg(nn.Module):
         pos = self.query_pos_head(ref).clamp(-10, 10)
         out_detach, corners_prev, hidden, layers = 0, 0, [], []
         for i, layer in enumerate(self.layers):
-            tgt = layer(tgt, ref, values, pos, num_dn, dn_mask)
+            tgt = layer(tgt, ref, values, pos, num_dn, dn_mask, pad_mask)
             if i == 0:  # 最初の層の出力で枠を出し、以後の層の距離の基準にする
                 pre_boxes = (self.pre_bbox_head(tgt) + inverse_sigmoid(ref)).sigmoid()
                 pre_logits = self.score_head[0](tgt)
@@ -589,7 +624,7 @@ class GTRSeg(nn.Module):
         for l, p in zip(layers, parts):
             l["mask_parts"] = p
         split = lambda x: (x[:, :num_dn], x[:, num_dn:])
-        out = {"layers": [], "dn_layers": []}
+        out = {"layers": [], "dn_layers": [], "content": content}
         for l in layers:
             dn_l, det_l = {}, {}
             for k, v in l.items():

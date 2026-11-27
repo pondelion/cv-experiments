@@ -70,6 +70,7 @@ from segmentation.instance_segmentation.lib_common.transforms import (batch_scal
                                                                       eval_transforms, square_eval_transforms)
 
 WARMUP = 500
+DEVA_STEP_FRACS = (120000 / 150000, 140000 / 150000)  # schedule="deva_step" で 0.1 倍にする所(公式の DEVA の s3_steps / s3_iterations)
 MULTISTEP_WARMUP_FACTOR = 0.067  # schedule="multistep" の warmup の始めの倍率(detectron2 の new baselines)
 MULTISTEP_FRACS = (163889 / 184375, 177546 / 184375)  # schedule="multistep" で 1/10 にする所(全部の回数に対する割合。同上)
 LOG_EVERY = 50  # 損失などを記録する回数の間隔
@@ -118,6 +119,8 @@ class TrainConfig:
     grad_accum: int = 1  # gradient accumulation steps(micro-batch size = batch_size / grad_accum。optimizer step 1 回あたりは batch_size 枚)
     grad_checkpoint: bool = False  # gtr_seg: backbone とマスクの head で gradient checkpointing を使う(結果は同じ、メモリが減り少し遅い)
     seed: int = 0
+    amp: bool = True  # AMP(autocast)を使うか。学習の forward・損失と推論を amp_dtype で計算する(重み・optimizer は float32)
+    amp_dtype: str = "bfloat16"  # AMP の精度。"bfloat16" だけ(float16 は損失のスケーリング(GradScaler)が要り、まだ対応していない)
     max_steps: int | None = None  # 動作確認用(この回数で止める)
     compile: bool = True
     compile_backbone: bool = False  # compile が False のときでも、backbone だけを torch.compile する(入力の形が変わらない部分だけ。exp00105)
@@ -216,6 +219,25 @@ def subset_set(name: str, n: int) -> str:
         set_path(sub).write_text(json.dumps({"images": images, "categories": data["categories"],
                                              "annotations": [a for a in data["annotations"] if a["image_id"] in ids]}))
     return sub
+
+
+def amp_autocast(cfg, cache_enabled: bool = True) -> torch.autocast:
+    """学習の設定の amp・amp_dtype で autocast を作る(画像・動画の学習で共通。設定にない古い記録は bf16 の AMP)。
+
+    Args:
+        cfg: amp・amp_dtype を持つ設定(TrainConfig・VideoTrainConfig。持たない設定は既定の値)。
+        cache_enabled: autocast の重みの変換の使い回し(CUDA graph で記録するときは False にする。PyTorch の決まり)。
+
+    Returns:
+        with で使う torch.autocast。
+
+    Raises:
+        ValueError: amp_dtype が bfloat16 でないとき(float16 は損失のスケーリングが要り、学習のコードがまだ対応していない)。
+    """
+    dtype = getattr(cfg, "amp_dtype", "bfloat16")
+    if dtype != "bfloat16":
+        raise ValueError(f"amp_dtype {dtype} には対応していない(bfloat16 だけ)")
+    return torch.autocast("cuda", dtype=torch.bfloat16, enabled=getattr(cfg, "amp", True), cache_enabled=cache_enabled)
 
 
 def build_model(cfg: TrainConfig, num_classes: int) -> torch.nn.Module:
@@ -449,6 +471,8 @@ def build_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup: 
             return lrf + (1 - lrf) * 0.5 * (1 + math.cos(math.pi * (step - flat) / (total_steps - flat - tail)))
         if schedule == "linear":
             return up * ((1 - step / total_steps) * (1 - lrf) + lrf)
+        if schedule == "deva_step":  # 公式の DEVA の stage 3(MultiStepLR。120k・140k / 150k 回で 0.1 倍。warmup の後に同じ割合で下げる)
+            return up * 0.1 ** sum(step >= round(f * total_steps) for f in DEVA_STEP_FRACS)
         if schedule == "multistep":  # detectron2 の WarmupParamScheduler + MultiStepParamScheduler(new baselines の値)
             if step < warmup:  # 0.067 倍から直線で 1 へ
                 return MULTISTEP_WARMUP_FACTOR + (1 - MULTISTEP_WARMUP_FACTOR) * step / warmup
@@ -532,7 +556,7 @@ def train_one_epoch(forward, model: torch.nn.Module, criterion: torch.nn.Module,
         images = images.contiguous(memory_format=torch.channels_last)
         targets = [{"masks": t["masks"].cuda(non_blocking=True), "labels": t["labels"].cuda(non_blocking=True)}
                    for t in batch["targets"]]
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with amp_autocast(cfg):
             if cfg.arch == "gtr_seg":  # denoising のクエリを作るために正解(枠・クラス)も渡す
                 outs = forward(images, targets_from_masks(targets, tuple(targets[0]["masks"].shape[-2:])))
             elif cfg.arch == "maskrcnn":  # 損失をモデルの中で計算するので正解も渡す
@@ -594,7 +618,7 @@ def predict(model: torch.nn.Module, set_name: str, cfg: TrainConfig, workers: in
                         collate_fn=collate)
     preds, t0 = [], time.perf_counter()
     for batch in loader:
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with amp_autocast(cfg):
             out = model(batch["image"].cuda(non_blocking=True).contiguous(memory_format=torch.channels_last))
             if cfg.arch in ("rfdetr_seg", "gtr_seg"):
                 last = out["layers"][-1]

@@ -27,7 +27,9 @@ from lib_common.plots import plot_eval_curves  # noqa: E402
 
 DEV_VIDEO, VAL_VIDEO = "vipseg_vis_cls8_dev", "vipseg_vis_cls8_val"
 DEV_FRAMES, VAL_FRAMES = "vipseg_frames_cls8_dev", "vipseg_frames_cls8_val"
-SKIP = ("SMOKETEST", "_ft100")  # 動作確認と、止めた続きの学習
+# 図に入れない学習: 動作確認、止めた続きの学習、メモリが足りずに止めた試し、README の結果の表に載せていない学習
+# (GTR 系 × VidEoMT 型(崩れた学習・学習中)、学習中の DEVA、伝搬だけを J&F で測る SAM 2)
+SKIP = ("SMOKETEST", "_ft100", "_oomtry", "videomt_gtr_", "deva_", "sam2_")
 OLD = ("videomt_vitb_dinov3_cls8_ep100_const", "videomt_vitb_from00105_cls8_ep100_const")  # 公式と違う実装の 2 本(記録)
 
 

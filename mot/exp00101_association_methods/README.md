@@ -128,7 +128,7 @@ OC-SORT 32.6 / 32.7 / 118。見失った物体を 1 フレームで消す SORT �
 
 test の役のセットの結果:
 
-#### mot17_test
+#### mot17_test(pedestrian(person で代用))
 
 | 追跡の手法 | セグメンテーションのモデル | 学習のデータ | 閾値 | HOTA | DetA | AssA | LocA | MOTA | IDF1 | IDSW |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -151,7 +151,7 @@ test の役のセットの結果:
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.8(val で選択) | 36.8 | 27.1 | 50.8 | 80.2 | 26.6 | 41.8 | 187 |
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.6(公式の値) | 35.5 | 28.1 | 45.9 | 79.5 | 25.0 | 39.1 | 334 |
 
-#### dancetrack_test
+#### dancetrack_test(pedestrian(person で代用))
 
 | 追跡の手法 | セグメンテーションのモデル | 学習のデータ | 閾値 | HOTA | DetA | AssA | LocA | MOTA | IDF1 | IDSW |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -174,7 +174,7 @@ test の役のセットの結果:
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.9(val で選択) | 31.3 | 52.2 | 19.0 | 84.3 | 61.1 | 32.4 | 2,996 |
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.6(公式の値) | 28.5 | 55.1 | 15.0 | 83.1 | 61.5 | 26.8 | 6,130 |
 
-#### kitti_mots_test(car)
+#### kitti_mots_test(car, pedestrian(person で代用)): car の結果
 
 | 追跡の手法 | セグメンテーションのモデル | 学習のデータ | 閾値 | HOTA | DetA | AssA | LocA | MOTA | IDF1 | IDSW |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -197,7 +197,7 @@ test の役のセットの結果:
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.9(val で選択) | 43.7 | 39.6 | 50.3 | 76.1 | 43.4 | 60.5 | 105 |
 | OC-SORT | Mask2Former(MinVIS の画像のモデル) | VIPSeg のフレーム(8 クラス) | det_thresh 0.6(公式の値) | 40.9 | 40.4 | 43.4 | 75.6 | 39.5 | 54.2 | 187 |
 
-#### kitti_mots_test(pedestrian)
+#### kitti_mots_test(car, pedestrian(person で代用)): pedestrian の結果
 
 | 追跡の手法 | セグメンテーションのモデル | 学習のデータ | 閾値 | HOTA | DetA | AssA | LocA | MOTA | IDF1 | IDSW |
 |---|---|---|---|---|---|---|---|---|---|---|

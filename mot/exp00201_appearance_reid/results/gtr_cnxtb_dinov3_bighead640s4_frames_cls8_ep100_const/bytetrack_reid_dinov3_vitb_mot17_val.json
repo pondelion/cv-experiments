@@ -1,0 +1,281 @@
+{
+ "bytetrack_reid_dinov3_vitb_th0.15": {
+  "config": {
+   "track_thresh": 0.15,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 43.614000684478754,
+    "DetA": 36.18037216229027,
+    "AssA": 54.44590883432039,
+    "LocA": 77.43510224671626,
+    "MOTA": 22.224281742354034,
+    "IDSW": 267.0,
+    "IDF1": 49.78588643017906
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.2": {
+  "config": {
+   "track_thresh": 0.2,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 46.1320329818304,
+    "DetA": 37.09009454623216,
+    "AssA": 58.76868373932266,
+    "LocA": 78.20175981445331,
+    "MOTA": 30.609823911028734,
+    "IDSW": 139.0,
+    "IDF1": 53.75919689397028
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.3": {
+  "config": {
+   "track_thresh": 0.3,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 45.85007378290674,
+    "DetA": 35.72100360826157,
+    "AssA": 59.946506648961375,
+    "LocA": 79.26632516442696,
+    "MOTA": 34.48748841519926,
+    "IDSW": 71.0,
+    "IDF1": 53.82950499197096
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.4": {
+  "config": {
+   "track_thresh": 0.4,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 44.86031959151418,
+    "DetA": 32.22643235685185,
+    "AssA": 63.09210249019295,
+    "LocA": 80.76352112409303,
+    "MOTA": 32.56348470806302,
+    "IDSW": 43.0,
+    "IDF1": 51.13528619192574
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.5": {
+  "config": {
+   "track_thresh": 0.5,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 41.023340849675314,
+    "DetA": 26.183580998884832,
+    "AssA": 64.53777423247041,
+    "LocA": 82.16558209552942,
+    "MOTA": 27.72937905468026,
+    "IDSW": 24.0,
+    "IDF1": 44.496576556916445
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.6": {
+  "config": {
+   "track_thresh": 0.6,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 34.581578024170824,
+    "DetA": 19.51309208241614,
+    "AssA": 61.47432018577433,
+    "LocA": 82.4834940224226,
+    "MOTA": 20.459684893419833,
+    "IDSW": 20.0,
+    "IDF1": 34.51675371163664
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.7": {
+  "config": {
+   "track_thresh": 0.7,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 25.43562657686822,
+    "DetA": 10.60456261637973,
+    "AssA": 61.103093484187156,
+    "LocA": 84.03709228704774,
+    "MOTA": 11.610750695088043,
+    "IDSW": 10.0,
+    "IDF1": 21.04265402843602
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.8": {
+  "config": {
+   "track_thresh": 0.8,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 5.716039223937578,
+    "DetA": 1.024034400116669,
+    "AssA": 32.336381803739236,
+    "LocA": 77.26741271060475,
+    "MOTA": 0.9341983317886932,
+    "IDSW": 1.0,
+    "IDF1": 1.9708029197080292
+   }
+  }
+ },
+ "bytetrack_reid_dinov3_vitb_th0.85": {
+  "config": {
+   "track_thresh": 0.85,
+   "low_thresh": 0.1,
+   "match_thresh": 0.9,
+   "second_thresh": 0.5,
+   "unconfirmed_thresh": 0.7,
+   "track_buffer": 30,
+   "fuse_score": true,
+   "min_box_area": 100.0,
+   "max_aspect": 1.6,
+   "duplicate_iou": 0.85,
+   "with_reid": true,
+   "proximity_thresh": 0.5,
+   "appearance_thresh": 0.25,
+   "feat_alpha": 0.9
+  },
+  "detector": "gtr_cnxtb_dinov3_bighead640s4_frames_cls8_ep100_const",
+  "feature": "dinov3_vitb",
+  "metrics": {
+   "pedestrian": {
+    "HOTA": 0.0,
+    "DetA": 0.0,
+    "AssA": 0.0,
+    "LocA": 100.0,
+    "MOTA": 0.0,
+    "IDSW": 0.0,
+    "IDF1": 0.0
+   }
+  }
+ }
+}
